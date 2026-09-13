@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit Configuration for EAOS (Emotion-Aware Adaptive Operating System)
+language: "en-US"
+early_access: false
+
+reviews:
+  # Review profile: "chill" for fast, non-pedantic reviews; "assertive" for strict compliance
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+
+  # Exclude generated, binary, virtualenv, and build artifacts from review
+  path_filters:
+    - "!**/*.db"
+    - "!**/*.sqlite*"
+    - "!**/dist/**"
+    - "!**/node_modules/**"
+    - "!**/.venv/**"
+    - "!**/venv/**"
+    - "!**/*.tsbuildinfo"
+    - "!**/package-lock.json"
+    - "!**/.DS_Store"
+
+  # Domain-specific instructions for CodeRabbit AI review agent
+  path_instructions:
+    - path: "backend/**"
+      instructions: |
+        - EAOS Privacy Guarantees:
+          * Keystroke logging must NEVER record actual key characters or text content (cadence/timing and backspace counts only).
+          * Raw camera/video frames must strictly be processed in-memory (RAM) and NEVER persisted or written to disk.
+        - FastAPI / Python:
+          * Enforce proper async/await patterns and prevent blocking calls on the main event loop.
+          * Ensure robust exception handling and clean SQLite database session/connection management.
+          * Validate numerical stability for EWMA baseline calculations and Adaptive Score (AS) z-score mathematics.
+    - path: "frontend/**"
+      instructions: |
+        - Enforce TypeScript strictness; avoid untyped `any`.
+        - Ensure proper cleanup of timers, event listeners, and WebSocket/SSE connections inside React `useEffect` hooks.
+        - Validate accessible, responsive UI styling and component boundaries.
+    - path: "electron/**"
+      instructions: |
+        - Enforce Electron security best practices: `contextIsolation: true` and avoid `nodeIntegration: true`.
+        - Verify safe IPC message handling between main and renderer processes.
+
+  tools:
+    ruff:
+      enabled: true
+    eslint:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+chat:
+  auto_reply: true
