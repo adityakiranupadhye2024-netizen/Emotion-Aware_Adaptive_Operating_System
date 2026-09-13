@@ -1,0 +1,2 @@
+export function Metric({title,value,sub}:{title:string,value:string,sub:string}){return <div className="card metric"><span>{title}</span><strong>{value}</strong><small>{sub}</small></div>}
+export function Status({name,ok,detail}:{name:string,ok:boolean,detail:string}){return <div className="status"><span className={ok?'statusdot ok':'statusdot bad'}/><div><b>{name}</b><small>{detail}</small></div></div>}

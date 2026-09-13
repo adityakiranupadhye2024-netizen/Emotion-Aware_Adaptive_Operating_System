@@ -1,74 +1,29 @@
-# Byte-compiled / optimized / DLL files
+# Virtual environments
+.venv
+.venv/
+venv
+venv/
+**/.venv
+**/venv
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
+# Node & Frontend
+node_modules/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+*.tsbuildinfo
 
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-.venv/
-
-# Environment variables & secrets
+# Environment & Databases
 .env
-.env.local
-.env.*.local
-*.pem
-*.key
-
-# Database
+.env.*
 *.db
 *.sqlite3
-backend/data/*.db
 
-# Node / Frontend
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# IDE / OS
+# OS / IDE
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-.idea/
 .vscode/
-*.swp
-*.swo
-
-# Downloaded ML weights / large model files (if any)
-backend/app/ai/models/*.onnx
-backend/app/ai/models/*.pt
-backend/app/ai/models/*.pth
-backend/app/ai/models/*.bin
-!backend/app/ai/models/.gitkeep
+.idea/
