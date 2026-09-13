@@ -265,6 +265,19 @@ def get_current_telemetry_snapshot():
     }
 
 
+@app.get('/')
+def root():
+    """Root status endpoint providing service status and links to frontend dashboard and API docs."""
+    return {
+        "service": "EAOS Backend API",
+        "status": "online",
+        "version": "1.0.0",
+        "docs_url": "http://127.0.0.1:8765/docs",
+        "frontend_url": "http://127.0.0.1:5173",
+        "message": "EAOS API is running. Open http://127.0.0.1:5173 for the live Dashboard or /docs for API documentation."
+    }
+
+
 @app.get('/api/v1/os/state')
 def get_os_state():
     """Ground truth endpoint querying actual macOS state (appearance, brightness, audio volume)."""
@@ -288,6 +301,8 @@ def execute_direct_action(payload: dict):
         params['value'] = payload['value']
     if 'brightness' in payload:
         params['brightness'] = payload['brightness']
+    if 'volume' in payload:
+        params['volume'] = payload['volume']
     params['reason'] = reason
     params['cycle_id'] = scheduler.cycle_id
 

@@ -280,7 +280,13 @@ export default function Overview({ s, online }: { s: LiveState | null; online: b
       </section>
 
       {/* Real OS Mode Switcher & Actuator Testing Controls */}
-      <QuickOSControl osState={s.actual_os_state} />
+      <QuickOSControl
+        osState={s.actual_os_state}
+        cycle={s.cycle}
+        decision={s.decision}
+        emotion={s.emotion?.dominant}
+        workload={s.workload?.score}
+      />
 
       {/* Verified Real macOS System State (Ground Truth) */}
       <section className="card" style={{ background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(56, 189, 248, 0.25)', marginBottom: '16px' }}>

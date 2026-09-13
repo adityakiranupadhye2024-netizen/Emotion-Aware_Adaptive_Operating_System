@@ -414,6 +414,12 @@ class CycleScheduler:
                 "message": "Automation disabled in Settings"
             }
 
+        # Update actual OS state after actuation
+        new_os_state = execution.get('state_after') or self.actuator.get_current_os_state(force_refresh=True)
+        current_state['actual_os_state'] = new_os_state
+        if self.frozen_state:
+            self.frozen_state['actual_os_state'] = new_os_state
+
         self.latest_decision = dict(self.frozen_decision)
         self.latest_decision['status'] = execution.get('status', 'executed')
         self.latest_decision['verified'] = execution.get('verified', False)

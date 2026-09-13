@@ -7,21 +7,52 @@ interface QuickOSControlProps {
     dark_mode_display?: string;
     brightness?: number;
     brightness_pct?: number;
+    volume?: number;
+    volume_pct?: number;
     audio_muted?: boolean;
     focus_mode_active?: boolean;
     actuator_ready?: boolean;
   };
+  cycle?: {
+    phase?: string;
+    remaining_seconds?: number;
+    elapsed_seconds?: number;
+    cycle_id?: number;
+    input_collection_active?: boolean;
+  };
+  decision?: {
+    action?: string;
+    reason?: string;
+    adaptive_score?: number;
+  };
+  emotion?: string;
+  workload?: number;
   onActionTriggered?: (result: any) => void;
 }
 
-export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActionTriggered }) => {
+export const QuickOSControl: React.FC<QuickOSControlProps> = ({
+  osState,
+  cycle,
+  decision,
+  emotion,
+  workload,
+  onActionTriggered
+}) => {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState<boolean>(true);
 
   const isDarkMode = osState?.dark_mode ?? false;
-  const isFocusOn = osState?.focus_mode_active || osState?.audio_muted;
+  const isFocusOn = !!osState?.focus_mode_active;
+  const isMuted = osState?.audio_muted ?? false;
   const brightnessPct = osState?.brightness_pct ?? (osState?.brightness !== undefined ? Math.round(osState.brightness * 100) : 50);
+  const volumePct = osState?.volume_pct ?? osState?.volume ?? 50;
+
+  const isInputPhase = cycle?.phase === 'INPUT_COLLECTION' || cycle?.input_collection_active;
+  const remainingSec = cycle?.remaining_seconds ?? 60;
+  const remMin = Math.floor(remainingSec / 60);
+  const remSec = Math.floor(remainingSec % 60);
+  const timerStr = `${remMin}:${remSec.toString().padStart(2, '0')}`;
 
   const handleAction = async (action: string, reason: string, value?: number) => {
     setLoadingAction(action);
@@ -53,6 +84,34 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
       marginBottom: '20px',
       boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
     }}>
+      {/* Cycle Phase & State Adaptation Status Banner */}
+      {cycle?.phase && (
+        <div style={{
+          padding: '8px 14px',
+          borderRadius: '8px',
+          background: isInputPhase ? 'rgba(56, 189, 248, 0.12)' : 'rgba(52, 211, 153, 0.14)',
+          border: `1px solid ${isInputPhase ? 'rgba(56, 189, 248, 0.35)' : 'rgba(52, 211, 153, 0.35)'}`,
+          marginBottom: '14px',
+          fontSize: '0.8rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 6
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '1rem' }}>{isInputPhase ? '📥' : '⚡'}</span>
+            <span style={{ color: isInputPhase ? '#38bdf8' : '#34d399', fontWeight: 700 }}>
+              {isInputPhase ? `Input Collection Phase Active (${timerStr})` : `Adaptation Active: ${(decision?.action || 'NO_ACTION').replace(/_/g, ' ')} (${timerStr})`}
+            </span>
+          </div>
+          <span style={{ color: '#cbd5e1', fontSize: '0.74rem' }}>
+            {isInputPhase
+              ? `Evaluating user state (${emotion || 'Active'}${workload !== undefined ? ` · ${Math.round(workload * 100)}% workload` : ''}) · Mode Switcher adapts after phase finishes`
+              : `Changed according to evaluated user state: ${decision?.reason || 'Activity nominal'}`}
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -99,7 +158,7 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
             border: `1px solid ${isFocusOn ? 'rgba(6, 182, 212, 0.4)' : 'rgba(100, 116, 139, 0.4)'}`,
             fontWeight: 600
           }}>
-            {isFocusOn ? '🔕 DND / Focus Active' : '🔔 Alerts Normal'}
+            {isFocusOn ? '🔕 DND Active' : '🔔 Alerts Normal'}
           </span>
           <span style={{
             fontSize: '0.75rem',
@@ -112,17 +171,28 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
           }}>
             🔆 {brightnessPct}% Brightness
           </span>
+          <span style={{
+            fontSize: '0.75rem',
+            padding: '4px 10px',
+            borderRadius: 6,
+            background: isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.25)',
+            color: isMuted ? '#fca5a5' : '#6ee7b7',
+            border: `1px solid ${isMuted ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)'}`,
+            fontWeight: 600
+          }}>
+            {isMuted ? '🔇 Audio Muted' : `🔊 ${volumePct}% Volume`}
+          </span>
         </div>
       </div>
 
-      {/* Button Grid */}
+      {/* Button Grid: 5 Buttons (Dark, Light, DND ON, DND OFF, Volume) */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: '10px',
         marginBottom: '14px'
       }}>
-        {/* Dark Mode */}
+        {/* 1. Dark Mode */}
         <button
           onClick={() => handleAction('ENABLE_DARK_MODE', 'User switched macOS to Dark Mode')}
           disabled={loadingAction !== null}
@@ -150,7 +220,7 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
           </span>
         </button>
 
-        {/* Light Mode */}
+        {/* 2. Light Mode */}
         <button
           onClick={() => handleAction('DISABLE_DARK_MODE', 'User switched macOS to Light Mode')}
           disabled={loadingAction !== null}
@@ -178,7 +248,7 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
           </span>
         </button>
 
-        {/* Enable Focus / DND */}
+        {/* 3. Enable Focus / DND */}
         <button
           onClick={() => handleAction('ENABLE_FOCUS_MODE', 'User turned on Focus / DND Mode')}
           disabled={loadingAction !== null}
@@ -195,20 +265,20 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
             gap: 2,
             transition: 'all 0.15s ease'
           }}
-          title="Mute alert audio and declutter non-essential desktop apps"
+          title="Engage native macOS Focus / Do Not Disturb"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔕 Turn ON DND / Focus</span>
+            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔕 Turn ON DND</span>
             {isFocusOn && <span style={{ color: '#34d399', fontSize: '0.8rem' }}>✓ ACTIVE</span>}
           </div>
           <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'ENABLE_FOCUS_MODE' ? 'Engaging...' : 'Mute alerts & declutter apps'}
+            {loadingAction === 'ENABLE_FOCUS_MODE' ? 'Engaging...' : 'Silence notifications & DND'}
           </span>
         </button>
 
-        {/* Disable Focus / DND */}
+        {/* 4. Disable Focus / DND */}
         <button
-          onClick={() => handleAction('DISABLE_FOCUS_MODE', 'User restored normal alert notifications')}
+          onClick={() => handleAction('DISABLE_FOCUS_MODE', 'User turned off DND Mode')}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',
@@ -223,26 +293,26 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
             gap: 2,
             transition: 'all 0.15s ease'
           }}
-          title="Restore alert volume and notifications"
+          title="Turn off native macOS Focus / Do Not Disturb"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔔 Turn OFF DND</span>
             {!isFocusOn && <span style={{ color: '#34d399', fontSize: '0.8rem' }}>✓ NORMAL</span>}
           </div>
           <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'DISABLE_FOCUS_MODE' ? 'Restoring...' : 'Restore alert audio volume'}
+            {loadingAction === 'DISABLE_FOCUS_MODE' ? 'Restoring...' : 'Turn off DND & restore alerts'}
           </span>
         </button>
 
-        {/* Reduce Brightness */}
+        {/* 5. Volume / Mute Button */}
         <button
-          onClick={() => handleAction('REDUCE_BRIGHTNESS', 'User reduced display brightness by 20%')}
+          onClick={() => handleAction('TOGGLE_MUTE', isMuted ? 'User unmuted system volume' : 'User muted system volume')}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',
             borderRadius: '8px',
-            background: 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
+            background: isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.2)',
+            border: `1px solid ${isMuted ? '#ef4444' : 'rgba(16, 185, 129, 0.35)'}`,
             color: '#f8fafc',
             cursor: loadingAction ? 'not-allowed' : 'pointer',
             textAlign: 'left',
@@ -251,76 +321,87 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({ osState, onActio
             gap: 2,
             transition: 'all 0.15s ease'
           }}
-          title="Dim physical screen luminance by 20%"
+          title={isMuted ? 'Click to unmute macOS system audio' : 'Click to mute macOS system audio'}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔅 Dim Brightness (-20%)</span>
+            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+              {isMuted ? '🔇 Audio Muted' : '🔊 Volume Button'}
+            </span>
+            <span style={{
+              color: isMuted ? '#f87171' : '#34d399',
+              fontSize: '0.8rem',
+              fontWeight: 700
+            }}>
+              {isMuted ? 'MUTED' : `${volumePct}%`}
+            </span>
           </div>
           <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'REDUCE_BRIGHTNESS' ? 'Dimming...' : 'Lower screen glare (hardware)'}
-          </span>
-        </button>
-
-        {/* Restore Brightness */}
-        <button
-          onClick={() => handleAction('RESTORE_BRIGHTNESS', 'User restored display brightness')}
-          disabled={loadingAction !== null}
-          style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            background: 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            color: '#f8fafc',
-            cursor: loadingAction ? 'not-allowed' : 'pointer',
-            textAlign: 'left',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            transition: 'all 0.15s ease'
-          }}
-          title="Restore physical screen luminance"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔆 Restore Brightness</span>
-          </div>
-          <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'RESTORE_BRIGHTNESS' ? 'Restoring...' : 'Return to nominal luminance'}
+            {loadingAction === 'TOGGLE_MUTE' ? 'Updating...' : (isMuted ? 'Click to unmute sound' : 'Click to mute sound')}
           </span>
         </button>
       </div>
 
-      {/* Brightness Fine-Tuning Slider */}
+      {/* Dual Sliders: Display Brightness & System Volume */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
-        padding: '10px 14px',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+        gap: '12px',
+        padding: '12px 16px',
         background: 'rgba(0, 0, 0, 0.25)',
         borderRadius: 8,
         border: '1px solid rgba(255, 255, 255, 0.08)'
       }}>
-        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
-          Display Brightness:
-        </span>
-        <input
-          type="range"
-          min="10"
-          max="100"
-          step="5"
-          value={brightnessPct}
-          onChange={(e) => {
-            const val = Number(e.target.value);
-            handleAction('SET_BRIGHTNESS', `Brightness adjusted to ${val}%`, val / 100);
-          }}
-          style={{
-            flex: 1,
-            accentColor: '#38bdf8',
-            cursor: 'pointer'
-          }}
-        />
-        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#38bdf8', minWidth: '42px', textAlign: 'right' }}>
-          {brightnessPct}%
-        </span>
+        {/* Brightness Slider */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+            🔆 Display Brightness:
+          </span>
+          <input
+            type="range"
+            min="10"
+            max="100"
+            step="5"
+            value={brightnessPct}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              handleAction('SET_BRIGHTNESS', `Brightness adjusted to ${val}%`, val / 100);
+            }}
+            style={{
+              flex: 1,
+              accentColor: '#38bdf8',
+              cursor: 'pointer'
+            }}
+          />
+          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#38bdf8', minWidth: '42px', textAlign: 'right' }}>
+            {brightnessPct}%
+          </span>
+        </div>
+
+        {/* Volume Slider */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+            {isMuted ? '🔇' : '🔊'} System Volume:
+          </span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={isMuted ? 0 : volumePct}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              handleAction('SET_VOLUME', `System volume adjusted to ${val}%`, val);
+            }}
+            style={{
+              flex: 1,
+              accentColor: '#10b981',
+              cursor: 'pointer'
+            }}
+          />
+          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#10b981', minWidth: '42px', textAlign: 'right' }}>
+            {isMuted ? 'Muted' : `${volumePct}%`}
+          </span>
+        </div>
       </div>
 
       {/* Instant Action Feedback Banner */}

@@ -16,8 +16,12 @@ ACTIONS = [
     'SUGGEST_DEBUG_RESOURCE',
     'RECOMMEND_AI_CODE_ASSISTANT',
     'REDUCE_BRIGHTNESS',
+    'RESTORE_BRIGHTNESS',
     'ENABLE_DARK_MODE',
     'DISABLE_DARK_MODE',
+    'MUTE_AUDIO',
+    'UNMUTE_AUDIO',
+    'SET_VOLUME',
     'SUGGEST_BREAK',
     'DELAY_NON_URGENT_NOTIFICATIONS',
     'NO_ACTION'
@@ -44,7 +48,7 @@ class LinUCBPolicyLearner:
       10 - 25 samples: LEARNING (Observing, shadow-scoring, and updating weights)
       >= 25 samples: ADAPTIVE (LinUCB contextual action selection bounded by safety rules)
     """
-    def __init__(self, actions: list, dimension: int = 6, alpha: float = 0.25):
+    def __init__(self, actions: list, dimension: int = 7, alpha: float = 0.25):
         self.actions = actions
         self.d = dimension
         self.alpha = alpha
@@ -52,6 +56,8 @@ class LinUCBPolicyLearner:
         self.b = {a: [0.0] * self.d for a in actions}
         self.total_feedback_count = 0
         self._load_from_db()
+        if self.total_feedback_count < 10:
+            self.train_actuator_models()
 
     def _load_from_db(self):
         try:
@@ -65,13 +71,53 @@ class LinUCBPolicyLearner:
                     ctx_str = str(ev.get('context', 'CODING') or 'CODING')
                     ctx_map = {'CODING': 1.0, 'WRITING': 0.8, 'STUDYING': 0.6, 'BROWSING': 0.4, 'MEETING': 0.2, 'GAMING': 0.0, 'IDLE': -0.5}
                     ctx_val = ctx_map.get(ctx_str, 0.5)
-                    feat = [1.0, 0.5, round(as_val, 2), 0.1, round(ctx_val, 2), 0.5]
+                    feat = [1.0, 0.5, round(as_val, 2), 0.1, round(ctx_val, 2), 0.5, 0.5]
                     rew = float(ev.get('reward', 0.0) or 0.0)
                     for i in range(self.d):
                         self.A[act][i][i] += feat[i] * feat[i]
                         self.b[act][i] += rew * feat[i]
         except Exception as e:
             logger.warning(f"Error loading policy events from db: {e}")
+
+    def train_actuator_models(self):
+        """
+        Calibrates and pre-trains LinUCB weights across all actuator buttons
+        grounded in human-state ergonomics, cognitive strain, and background lighting.
+        """
+        training_samples = [
+            # Dark Mode: Dim ambient lighting (< 0.25)
+            ('ENABLE_DARK_MODE', [1.0, 0.40, 0.50, 0.10, 0.8, 0.4, 0.15], 1.0),
+            ('ENABLE_DARK_MODE', [1.0, 0.55, 0.60, 0.00, 1.0, 0.5, 0.08], 1.0),
+            # Light Mode: Bright ambient lighting (> 0.65)
+            ('DISABLE_DARK_MODE', [1.0, 0.35, 0.50, 0.20, 0.8, 0.3, 0.85], 1.0),
+            ('DISABLE_DARK_MODE', [1.0, 0.25, 0.45, 0.30, 0.4, 0.2, 0.75], 1.0),
+            # Focus Mode (Turn ON DND): High cognitive workload / deep focus
+            ('ENABLE_FOCUS_MODE', [1.0, 0.80, 0.75, 0.40, 1.0, 0.8, 0.50], 1.0),
+            ('ENABLE_FOCUS_MODE', [1.0, 0.70, 0.70, 0.35, 0.8, 0.7, 0.45], 1.0),
+            # Turn OFF DND: Low workload / relaxation / recovery
+            ('DISABLE_FOCUS_MODE', [1.0, 0.15, 0.35, 0.50, 0.4, 0.1, 0.50], 1.0),
+            ('DISABLE_FOCUS_MODE', [1.0, 0.10, 0.30, 0.40, -0.5, 0.0, 0.50], 1.0),
+            # Mute Audio: High frustration / typing friction / sensory relief
+            ('MUTE_AUDIO', [1.0, 0.70, 0.40, -0.45, 1.0, 0.5, 0.50], 1.0),
+            ('MUTE_AUDIO', [1.0, 0.65, 0.45, -0.35, 0.8, 0.6, 0.40], 1.0),
+            # Unmute Audio: Relaxed state / media / workload eased
+            ('UNMUTE_AUDIO', [1.0, 0.20, 0.45, 0.60, 0.4, 0.2, 0.50], 1.0),
+            ('UNMUTE_AUDIO', [1.0, 0.15, 0.40, 0.55, 0.2, 0.1, 0.50], 1.0),
+            # Reduce Brightness: Visual fatigue / glare / eye strain
+            ('REDUCE_BRIGHTNESS', [1.0, 0.60, 0.45, -0.25, 0.8, 0.3, 0.20], 1.0),
+            # Restore Brightness: Balanced / daytime recovery
+            ('RESTORE_BRIGHTNESS', [1.0, 0.30, 0.55, 0.30, 0.8, 0.4, 0.70], 1.0),
+            # Break Suggestion: Sustained fatigue
+            ('SUGGEST_BREAK', [1.0, 0.55, 0.35, -0.30, 0.6, 0.2, 0.40], 1.0),
+        ]
+
+        for act, feat, rew in training_samples:
+            if act in self.A:
+                for i in range(self.d):
+                    self.A[act][i][i] += feat[i] * feat[i]
+                    self.b[act][i] += rew * feat[i]
+                self.total_feedback_count += 1
+        logger.info(f"Calibrated LinUCB actuator models with {len(training_samples)} trained ergonomic samples.")
 
     @property
     def status(self) -> str:
@@ -93,7 +139,10 @@ class LinUCBPolicyLearner:
         typing_rate = kb.get('avg_typing_rate', kb.get('typing_rate', 0.0))
         typing_norm = min(1.0, max(0.0, typing_rate / 6.0))
 
-        return [1.0, round(workload, 2), round(as_score, 2), round(valence, 2), round(ctx_val, 2), round(typing_norm, 2)]
+        cam = state.get('inputs', {}).get('camera', {})
+        ambient = float(cam.get('ambient_light', 0.5))
+
+        return [1.0, round(workload, 2), round(as_score, 2), round(valence, 2), round(ctx_val, 2), round(typing_norm, 2), round(ambient, 2)]
 
     def predict(self, feature_vector: list, candidate_actions: list) -> Tuple[str, float, float]:
         best_a = candidate_actions[0] if candidate_actions else 'NO_ACTION'
@@ -127,7 +176,7 @@ class LinUCBPolicyLearner:
                 state_or_vector.get('context', {}).get('canonical_context', 'UNKNOWN') if isinstance(state_or_vector.get('context'), dict) else str(state_or_vector.get('context', 'UNKNOWN'))
             )
         else:
-            feat = [1.0, 0.5, 0.5, 0.0, 0.3, 0.5]
+            feat = [1.0, 0.5, 0.5, 0.0, 0.3, 0.5, 0.5]
 
         self.total_feedback_count += 1
         for i in range(self.d):
@@ -368,6 +417,7 @@ class DecisionEngine:
         # OS State Persistence to prevent flapping / duplicate actions
         self.in_focus_mode = False
         self.dark_mode_active = False
+        self.audio_muted = False
 
     def reset(self):
         self.last_action = 'NO_ACTION'
@@ -375,6 +425,7 @@ class DecisionEngine:
         self.action_history.clear()
         self.in_focus_mode = False
         self.dark_mode_active = False
+        self.audio_muted = False
 
     def calculate_as(self, state: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
         """
@@ -454,7 +505,10 @@ class DecisionEngine:
             self.dark_mode_active = bool(real_os['dark_mode'])
         if 'focus_mode_active' in real_os and real_os['focus_mode_active'] is not None:
             self.in_focus_mode = bool(real_os['focus_mode_active'])
+        if 'audio_muted' in real_os and real_os['audio_muted'] is not None:
+            self.audio_muted = bool(real_os['audio_muted'])
         curr_brightness = real_os.get('brightness', 0.5)
+        curr_volume = real_os.get('volume', 50)
 
         # Personalization deviations
         devs = self.personalization.calculate_personal_deviations(state)
@@ -524,8 +578,13 @@ class DecisionEngine:
 
         # RULE CONTEXT MODIFIER 1: MEETING
         if context == 'MEETING':
-            # Do NOT mute system audio or declutter frontmost windows during meetings!
-            if (emotion == 'Fatigued' or probs.get('Fatigued', 0.0) > th_fatigue_high) and workload > 0.40:
+            # Safeguard meeting audio: if audio was muted, unmute it so meeting audio is audible
+            if self.audio_muted:
+                action = 'UNMUTE_AUDIO'
+                reason = 'Active meeting detected; system audio unmuted so meeting participants can be heard clearly.'
+                self.audio_muted = False
+                contributing_factors.append('Meeting audio safeguard')
+            elif (emotion == 'Fatigued' or probs.get('Fatigued', 0.0) > th_fatigue_high) and workload > 0.40:
                 action = 'SUGGEST_BREAK'
                 reason = f'Elevated fatigue during meeting session; subtle wellness chime suggested.'
                 contributing_factors.append('Fatigue in active meeting')
@@ -547,6 +606,11 @@ class DecisionEngine:
                 reason = 'User is currently idle/away. Focus Mode disengaged.'
                 self.in_focus_mode = False
                 contributing_factors.append('Idle state observed')
+            elif self.audio_muted:
+                action = 'UNMUTE_AUDIO'
+                reason = 'User is currently idle/away; system audio unmuted.'
+                self.audio_muted = False
+                contributing_factors.append('Idle audio restoration')
             elif curr_brightness < 0.45:
                 action = 'RESTORE_BRIGHTNESS'
                 reason = 'User idle; standard display brightness restored.'
@@ -557,15 +621,35 @@ class DecisionEngine:
 
         # RULE CONTEXT MODIFIER 4: CODING / WRITING / STUDYING / GENERAL WORK
         else:
-            # Trigger 1: Frustration & Debugging Assistance
-            if (emotion == 'Frustrated' or probs.get('Frustrated', 0.0) > th_frust_high or backspace_rate > th_backspace_high) and (context in ['CODING'] or typing_rate > 0.8):
+            # Trigger 1: Environmental Ambient Lighting (Dark Mode vs Light Mode)
+            if ambient < th_dim and not self.dark_mode_active:
+                action = 'ENABLE_DARK_MODE'
+                reason = f'Low background lighting ({ambient:.2f} < {th_dim:.2f}); Dark Mode engaged automatically for eye comfort.'
+                self.dark_mode_active = True
+                contributing_factors.append('Low ambient lighting')
+
+            elif ambient > th_bright and self.dark_mode_active:
+                action = 'DISABLE_DARK_MODE'
+                reason = f'Bright background lighting ({ambient:.2f} > {th_bright:.2f}); macOS Light appearance restored automatically.'
+                self.dark_mode_active = False
+                contributing_factors.append('Bright ambient lighting')
+
+            # Trigger 2: Frustration & Auditory Sensory Relief
+            elif (emotion == 'Frustrated' or probs.get('Frustrated', 0.0) > th_frust_high or backspace_rate > th_backspace_high) and not self.audio_muted:
+                action = 'MUTE_AUDIO'
+                reason = f'Elevated frustration ({int(probs.get("Frustrated", 0.0) * 100)}%) / typing friction; system audio muted to eliminate auditory stress.'
+                self.audio_muted = True
+                contributing_factors.append('Auditory stress relief for frustration')
+
+            # Trigger 2B: High Coding Frustration & Debugging Assistance (if already muted)
+            elif (emotion == 'Frustrated' or probs.get('Frustrated', 0.0) > th_frust_high or backspace_rate > th_backspace_high) and (context in ['CODING'] or typing_rate > 0.8):
                 action = 'SUGGEST_DEBUG_RESOURCE'
                 reason = f'Elevated friction / backspace error rate ({int(backspace_rate * 100)}%) detected while coding.'
                 contributing_factors.append('High typing error rate')
                 contributing_factors.append('Frustration detected in coding')
 
-            # Trigger 2: Focus Mode Activation (Personalized Workload Elevation or High Engagement)
-            elif (workload >= th_workload_high or (not is_calibrating and workload_dev >= 0.18) or emotion in ['Focused', 'Flow State'] or probs.get('Focused', 0.0) > 0.22) and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']) and not self.in_focus_mode:
+            # Trigger 3: Focus Mode Activation (Personalized Workload Elevation or High Engagement)
+            elif (workload >= th_workload_high or (not is_calibrating and workload_dev >= 0.18) or emotion in ['Focused', 'Flow State'] or probs.get('Focused', 0.0) > 0.35) and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']) and not self.in_focus_mode:
                 action = 'ENABLE_FOCUS_MODE'
                 if not is_calibrating and workload_dev >= 0.18:
                     reason = f'Workload was significantly higher than your personal baseline ({devs["workload"]["current"]} vs {devs["workload"]["baseline"]}, deviation {workload_dev:+.2f}) while {context.lower()}; notification alerts silenced & focus mode engaged.'
@@ -576,12 +660,12 @@ class DecisionEngine:
                     contributing_factors.append('High cognitive workload')
                 self.in_focus_mode = True
 
-            # Trigger 3: Low Ambient Light -> Dark Mode
-            elif ambient < th_dim and not self.dark_mode_active:
-                action = 'ENABLE_DARK_MODE'
-                reason = f'Low ambient light ({ambient:.2f}); Dark Mode engaged for eye comfort.'
-                self.dark_mode_active = True
-                contributing_factors.append('Low ambient lighting')
+            # Trigger 3B: Deep Focus Audio Muting (Sustained Focus with Focus Mode already active)
+            elif self.in_focus_mode and not self.audio_muted and (workload >= th_workload_high or emotion in ['Focused', 'Flow State']):
+                action = 'MUTE_AUDIO'
+                reason = f'Sustained deep focus & immersion ({int(probs.get("Focused", 0.0) * 100)}%); system audio muted to eliminate disruptive noises.'
+                self.audio_muted = True
+                contributing_factors.append('Deep focus audio muting')
 
             # Trigger 4: Eye Strain / Visual Fatigue / Screen Glare -> Reduce Brightness
             elif (emotion in ['Fatigued', 'Frustrated'] or workload > 0.50 or ambient < th_dim) and curr_brightness > 0.35:
@@ -595,19 +679,19 @@ class DecisionEngine:
                 reason = f'Sustained workload ({int(workload * 100)}%) with fatigue indicators; recommended wellness pause.'
                 contributing_factors.append('Elevated fatigue indicators')
 
-            # Trigger 6: Exit Focus Mode when relaxed/idle
+            # Trigger 6: Recovery / Relaxed State -> Unmute Audio
+            elif self.audio_muted and (emotion in ['Relaxed'] or (workload < 0.25 and emotion != 'Frustrated')):
+                action = 'UNMUTE_AUDIO'
+                reason = 'Cognitive workload eased and user in relaxed state; system audio unmuted.'
+                self.audio_muted = False
+                contributing_factors.append('Relaxed state audio unmute')
+
+            # Trigger 7: Exit Focus Mode when relaxed/idle
             elif emotion in ['Relaxed'] and self.in_focus_mode and typing_rate < 0.2:
                 action = 'DISABLE_FOCUS_MODE'
                 reason = 'Workload eased; standard desktop notifications & audio restored.'
                 self.in_focus_mode = False
                 contributing_factors.append('Relaxed cognitive recovery')
-
-            # Trigger 7: Bright Ambient Light -> Restore Light Mode
-            elif (ambient > th_bright or (emotion == 'Relaxed' and ambient >= 0.45)) and self.dark_mode_active:
-                action = 'DISABLE_DARK_MODE'
-                reason = f'Bright ambient lighting ({ambient:.2f}); macOS Light appearance restored.'
-                self.dark_mode_active = False
-                contributing_factors.append('Ambient lighting restored')
 
             # Trigger 8: Bright Ambient Light / Recovery -> Restore Brightness
             elif (ambient > th_bright or emotion in ['Relaxed']) and curr_brightness < 0.50:
@@ -618,9 +702,14 @@ class DecisionEngine:
         # -------------------------------------------------------------
         # AUTOMATIC POLICY LEARNING (Feature 13 - LinUCB Bandit)
         # -------------------------------------------------------------
-        candidate_actions = ['NO_ACTION', 'SUGGEST_BREAK']
+        candidate_actions = ['NO_ACTION']
+        if workload > 0.3 or emotion == 'Fatigued':
+            candidate_actions.append('SUGGEST_BREAK')
+
+        # Focus Mode candidates: only when actively working, never when idle or relaxed
         if not self.in_focus_mode:
-            candidate_actions.append('ENABLE_FOCUS_MODE')
+            if context not in ['IDLE', 'GAMING'] and emotion != 'Relaxed':
+                candidate_actions.append('ENABLE_FOCUS_MODE')
         else:
             candidate_actions.append('DISABLE_FOCUS_MODE')
 
@@ -628,6 +717,11 @@ class DecisionEngine:
             candidate_actions.append('ENABLE_DARK_MODE')
         else:
             candidate_actions.append('DISABLE_DARK_MODE')
+
+        if not self.audio_muted:
+            candidate_actions.append('MUTE_AUDIO')
+        else:
+            candidate_actions.append('UNMUTE_AUDIO')
 
         if curr_brightness > 0.35:
             candidate_actions.append('REDUCE_BRIGHTNESS')
@@ -650,8 +744,15 @@ class DecisionEngine:
                     policy_name = f'Learned LinUCB ({self.policy_learner.status})'
                     reason = f'Learned policy selected {action.replace("_", " ").title()} based on {self.policy_learner.total_feedback_count} feedback samples (Bandit UCB score: {bandit_val:.2f}).'
                     contributing_factors.append(f'Learned bandit recommendation ({action})')
-                # If in ADAPTIVE mode and the bandit strongly favors an alternative action:
-                elif self.policy_learner.status == 'ADAPTIVE' and best_bandit_action != action and bandit_val > 0.20:
+                # If in ADAPTIVE mode and the bandit strongly favors an alternative action
+                # (guarded so lighting ergonomics, acute sensory relief, and context safeguards are strictly preserved):
+                elif (
+                    self.policy_learner.status == 'ADAPTIVE'
+                    and best_bandit_action != action
+                    and bandit_val > 0.20
+                    and action not in ['ENABLE_DARK_MODE', 'DISABLE_DARK_MODE', 'MUTE_AUDIO', 'UNMUTE_AUDIO']
+                    and context not in ['MEETING', 'IDLE', 'GAMING']
+                ):
                     old_action = action
                     action = best_bandit_action
                     conf = bandit_conf

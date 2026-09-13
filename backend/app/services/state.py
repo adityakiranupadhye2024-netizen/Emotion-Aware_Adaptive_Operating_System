@@ -27,6 +27,9 @@ class StateBuilder:
             jitter = ms.get('jitter', 0.0)               # 0.0 to 1.0
             mouse_active = not ms.get('idle', True)
             face = cam.get('face_detected', False)
+            eyes = cam.get('eyes_detected', False)
+            smile = cam.get('smile_detected', False)
+            fatigue_face = cam.get('fatigue_score', 0.0)
             ambient = cam.get('ambient_light', 0.5)
             activity = ctx.get('activity', 'General')
             switch_rate = ctx.get('app_switch_rate', 0.0)
@@ -37,23 +40,23 @@ class StateBuilder:
             is_coding = activity == 'Coding'
             is_work = activity in ['Coding', 'Writing/Studying']
 
-            # Focused: productive activity, active typing or steady mouse, face engaged (if camera active), low backspace
-            focus_raw = 0.15 + 0.45 * min(1.0, typing / 4.0) + (0.20 if face else 0.0) + (0.20 if is_work else 0.0) - (0.35 * min(1.0, backspace * 3.0))
+            # Focused: productive activity, active typing or steady mouse, face and eyes engaged, low backspace
+            focus_raw = 0.15 + 0.45 * min(1.0, typing / 4.0) + (0.15 if face else 0.0) + (0.10 if eyes else 0.0) + (0.20 if is_work else 0.0) - (0.35 * min(1.0, backspace * 3.0))
 
-            # Flow State: rhythmic sustained typing, high focus, minimal errors, coding
-            flow_raw = (0.50 * min(1.0, typing / 5.0) + 0.30 * max(0.0, 1.0 - backspace * 6.0) + 0.20 * max(0.0, 1.0 - jitter * 2.0)) if (is_work and typing > 2.0) else 0.04
+            # Flow State: rhythmic sustained typing, high focus, minimal errors, coding, calm expression
+            flow_raw = (0.45 * min(1.0, typing / 5.0) + 0.25 * max(0.0, 1.0 - backspace * 6.0) + 0.15 * max(0.0, 1.0 - jitter * 2.0) + (0.15 if eyes else 0.0)) if (is_work and typing > 2.0) else 0.04
 
             # Frustrated: high backspaces, mouse jitter, frequent rapid window shifts, high error corrections
-            frust_raw = 0.05 + 0.60 * min(1.0, backspace * 4.5) + 0.25 * min(1.0, jitter * 2.5) + (0.15 if is_coding and backspace > 0.15 else 0.0)
+            frust_raw = 0.05 + 0.60 * min(1.0, backspace * 4.5) + 0.25 * min(1.0, jitter * 2.5) + (0.15 if is_coding and backspace > 0.15 else 0.0) - (0.10 if smile else 0.0)
 
-            # Fatigued: long continuous session, sluggish inputs, face leaving frame or absent, low activity
-            fatigue_raw = 0.05 + 0.50 * min(1.0, session_min / 45.0) + (0.25 if not mouse_active and typing < 0.3 else 0.05) + (0.15 if (cam.get('active') and not face) else 0.0)
+            # Fatigued: facial fatigue cues (drowsiness/eyes not visible), long session, sluggish inputs, low activity
+            fatigue_raw = 0.05 + 0.35 * min(1.0, session_min / 45.0) + (0.30 * fatigue_face if face else 0.0) + (0.25 if not mouse_active and typing < 0.3 else 0.05) + (0.15 if (cam.get('active') and not face) else 0.0)
 
             # Confused: high switching rate without productive typing, searching/browsing
             confused_raw = 0.05 + 0.50 * min(1.0, switch_rate / 4.0) + (0.20 if activity == 'Browsing' and typing < 0.5 else 0.05)
 
-            # Relaxed: low system load, browsing or media, gentle inputs
-            relaxed_raw = 0.10 + 0.40 * max(0.0, 1.0 - typing / 3.0) + 0.30 * max(0.0, 1.0 - cpu_pct * 2.0) + (0.20 if activity in ['Media/Entertainment', 'Browsing'] else 0.0)
+            # Relaxed: smile detected, low system load, browsing or media, gentle inputs
+            relaxed_raw = 0.10 + 0.35 * max(0.0, 1.0 - typing / 3.0) + 0.25 * max(0.0, 1.0 - cpu_pct * 2.0) + (0.20 if smile else 0.0) + (0.20 if activity in ['Media/Entertainment', 'Browsing'] else 0.0)
 
             raw_scores = {
                 'Focused': max(0.02, focus_raw),

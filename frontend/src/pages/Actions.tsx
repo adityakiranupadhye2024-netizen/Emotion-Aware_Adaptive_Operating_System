@@ -80,7 +80,14 @@ export default function Actions({ s }: { s: LiveState | null }) {
       )}
 
       {/* Real OS Mode Switcher & Actuator Testing Controls */}
-      <QuickOSControl osState={s.actual_os_state} onActionTriggered={fetchHistory} />
+      <QuickOSControl
+        osState={s.actual_os_state}
+        cycle={s.cycle}
+        decision={s.decision}
+        emotion={s.emotion?.dominant}
+        workload={s.workload?.score}
+        onActionTriggered={fetchHistory}
+      />
 
       {/* Active Autonomous Adaptation Hero */}
       <section className="card heroaction">

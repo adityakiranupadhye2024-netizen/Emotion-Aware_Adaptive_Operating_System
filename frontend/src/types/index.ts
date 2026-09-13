@@ -160,6 +160,8 @@ export interface ActualOSState {
   brightness: number;
   brightness_pct: number;
   brightness_controllable: boolean;
+  volume?: number;
+  volume_pct?: number;
   audio_muted: boolean;
   focus_mode_active: boolean;
   permission_status: 'GRANTED' | 'REQUIRED' | string;
