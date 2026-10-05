@@ -83,6 +83,7 @@ aside {
   letter-spacing: -0.3px;
   background: linear-gradient(180deg, #fff, #b8c7dd);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -284,6 +285,7 @@ header {
   margin: 0 0 6px;
   background: linear-gradient(180deg, #fff, #c8d3e2);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -403,6 +405,7 @@ header {
   margin: 6px 0 10px;
   background: linear-gradient(180deg, #fff, #d8b4fe);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -589,6 +592,7 @@ header {
   margin: 10px 0 18px;
   background: linear-gradient(180deg, #fff, #93c5fd);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
