@@ -1,30 +1,78 @@
 # EAOS — Emotion-Aware Adaptive Operating System
 
-A cross-platform user-space adaptive desktop system that combines multimodal behavioral signals (keyboard cadence, mouse dynamics, active application context, cognitive workload, and camera/facial cues) with an individual **Personalization Engine** to autonomously evaluate an **Adaptive Score (AS)** and execute native macOS adaptations in **continuous 5-minute cycles**.
+[![macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-blue.svg)](https://apple.com/macos)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/Frontend-React%2018%20%2B%20TypeScript%20%2B%20Vite-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
+[![OpenCV](https://img.shields.io/badge/Vision-OpenCV%204.12-5C3EE8.svg?logo=opencv&logoColor=white)](https://opencv.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> **Note**: EAOS is an autonomous desktop adaptation layer, not a replacement OS kernel. It operates strictly in user space.
+A cross-platform, user-space adaptive desktop system that combines real multimodal behavioral signals (keyboard cadence, mouse dynamics, active application context, cognitive workload, and on-device facial cues) with an individual **Personalization Engine** to autonomously evaluate an **Adaptive Score (AS)** and execute native macOS adaptations in **continuous 5-minute wall-clock cycles**.
+
+> **Note**: EAOS is an autonomous desktop adaptation layer operating strictly in user space—not a replacement OS kernel. It interfaces directly with native macOS Shortcuts and AppleScript APIs with zero cloud dependencies.
+
+---
+
+## 🌟 Key Features
+
+* **👁️ Real-Time AI Vision & Facial Emotion HUD**: Local in-memory face tracking via OpenCV Haar Cascades with sleek cyber corner brackets, eye engagement tracking, smile detection, and dynamic in-frame emotion badges.
+* **🔄 Synchronized 5-Minute Wall-Clock Cycle**: Continuous repeating cycle with a 1-minute sensing window followed by a 4-minute adaptation window, preventing clock drift.
+* **⚡ Native macOS Shortcut Actuation**: Direct zero-latency hardware and appearance actuation via macOS Shortcuts (`Set Appearance`, `Turn On DND`, `Set Volume`, `Set Brightness`).
+* **🧠 Individual Personalization Engine**: Online EWMA learning that calibrates to your personal typing cadence, error tolerance, and mouse dynamics rather than static thresholds.
+* **📊 Explainable AI Decision Engine**: LinUCB contextual bandit algorithm paired with rule-based verification, computing an Adaptive Score ($AS \in [0, 1]$) with transparent rationales.
+* **🔒 Strict On-Device Privacy Architecture**: Zero keylogging (only inter-key timing and error rates are captured), RAM-only frame processing (never written to disk), and automatic hardware release during adaptation phases.
+* **🎛️ Dual-Mode Live Dashboard**: Futuristic React + Vite dark-mode dashboard with real-time WebSocket telemetry, Gantt state timelines, quick manual actuator overrides, and dual-mode camera streaming (OpenCV stream or browser webcam).
 
 ---
 
 ## 🔄 Continuous 5-Minute Adaptive Cycle Architecture
 
-EAOS runs on a repeating **5-minute continuous cycle** based on absolute timestamps to prevent drift:
+EAOS aligns its observation and actuation phases with continuous wall-clock boundaries:
 
 ```text
-00:00 ──────────────────────────────────────────────────────────────────────── 05:00
-  │                                                                              │
-  ▼                                                                              ▼
-5-Minute Input Collection Window                                        Cycle Assessment & Actuation
-• Real keyboard cadence (typing speed, error rate)                      • Finalize 5-minute input window
-• Real mouse dynamics (jitter, movement, idle)                          • Compare inputs to personal baseline
-• Active application & task context classification                      • Calculate Adaptive Score (AS)
-• Cognitive workload estimation                                         • Decision Engine selects adaptation
-• Camera / facial engagement (when privacy toggle is enabled)           • OS Actuator executes macOS action
-                                                                        • Notification sent to user
-                                                                        • Personal baseline updated (EWMA)
-                                                                        • Timer resets to 05:00
-                                                                        • Next 5-minute cycle begins
+00:00 ───────────────────────────── 01:00 ──────────────────────────────────────── 05:00
+  │                                   │                                              │
+  ▼                                   ▼                                              ▼
+[INPUT COLLECTION PHASE]            [BOUNDARY FINALIZATION]                [ADAPTATION PHASE]
+• Webcam opens (sensing window)     • Finalize 1-min aggregated signals    • Webcam closed & released (privacy)
+• Keystroke dynamics & cadence      • Compare inputs against EWMA baseline • OS adaptation remains active
+• Mouse velocity, jitter, idle      • Calculate Adaptive Score (AS)        • Behavioral sensors monitor ease
+• Frontmost app & task context      • LinUCB / Decision Engine picks arm   • System prepares for next cycle
+• Cognitive workload estimation     • Native macOS Shortcut executed       • Telemetry & durations recorded
+• In-memory facial valence & smile  • User notification dispatched         • Countdown resets to 05:00
 ```
+
+---
+
+## 👁️ AI Vision & Facial Emotion Tracking Box
+
+EAOS features an interactive on-device vision stream accessible from both the **Overview** and **AI State** dashboard tabs:
+
+* **In-Frame Face Bounding Box**: Cybernetic corner brackets lock onto detected faces with sub-millisecond latency.
+* **Dynamic In-Camera Emotion Badge**: Real-time classified emotion (`FOCUSED`, `FLOW STATE`, `RELAXED`, `FATIGUED`, `FRUSTRATED`, `CONFUSED`) is rendered directly over the face with confidence percentages and tailored color themes.
+* **Eye & Expression Indicators**: Real-time crosshairs track eye engagement and smile detection.
+* **Cyber Scanline & Standby HUD**: When the camera is closed during the adaptation phase to preserve privacy, a synthetic cyberpunk HUD standby screen is rendered so the video stream never drops or errors.
+* **Dual Streaming Support**:
+  1. **Backend OpenCV Stream**: Native MJPEG video stream from `/api/v1/camera/stream` at ~16 FPS.
+  2. **Direct Browser Cam**: High-resolution browser WebCam capture via `navigator.mediaDevices.getUserMedia`.
+* **On-Demand Preview**: Click **`▶ Live Cam Preview`** at any time to stream continuously regardless of cycle phase.
+
+---
+
+## 🖥️ macOS Shortcuts Actuator (Hardware Bridge)
+
+EAOS leverages macOS Shortcuts for reliable, native control without brittle UI scripting:
+
+| Adaptation Action | System Command Executed | macOS Effect |
+| :--- | :--- | :--- |
+| `ENABLE_DARK_MODE` | `shortcuts run "Set Appearance" <<< "Dark"` | Switches macOS system appearance to Dark Mode |
+| `DISABLE_DARK_MODE` | `shortcuts run "Set Appearance" <<< "Light"` | Restores macOS system appearance to Light Mode |
+| `ENABLE_FOCUS_MODE` | `shortcuts run "Turn On DND" <<< "On"` | Engages Do Not Disturb / Focus Mode |
+| `DISABLE_FOCUS_MODE` | `shortcuts run "Turn On DND" <<< "Off"` | Disengages Focus Mode and restores notifications |
+| `SET_BRIGHTNESS` | `shortcuts run "Set Brightness" <<< "<val>"` | Sets display brightness via DisplayServices |
+| `SET_VOLUME` | `shortcuts run "Set Volume" <<< "<val>"` | Sets output volume level (0 to 100) |
+| `TOGGLE_MUTE` | `shortcuts run "Set Volume" <<< "0"` | Mutes audio during high stress or un-mutes |
+| `RESET_ALL` | Runs all 4 baseline shortcuts sequentially | Restores Light Mode, DND Off, Volume 50%, Brightness 65% |
 
 ---
 
@@ -34,8 +82,8 @@ EAOS learns what is normal for you over time rather than enforcing static one-si
 
 1. **Signals Learned**:
    - Typing speed (keys/sec) & error rate
-   - Mouse movement & jitter agitation
-   - Workload baseline
+   - Mouse movement velocity & directional jitter
+   - Cognitive workload baseline
    - Dominant emotional distribution
 2. **Initial Calibration (First 5 Cycles)**:
    - Collects actual observations without aggressive adaptations.
@@ -46,68 +94,64 @@ EAOS learns what is normal for you over time rather than enforcing static one-si
    - Extreme distress (acute frustration/fatigue) is dampened so temporary spikes do not skew your long-term normal baseline.
 4. **Personal Z-Scores & Deviation**:
    - Computes $z = \frac{x - \mu}{\sigma}$ to evaluate if your current state is unusually elevated relative to your individual habits.
-   - The deviation feeds directly into the **Personalization Component** of the Adaptive Score.
 5. **Reset Capability**:
-   - You can click **🔄 Reset Personal Baseline** in Settings at any time to clear learned statistics and restart calibration.
+   - You can click **🔄 Reset Adaptations** in the dashboard header or **Reset Baseline** in Settings at any time.
 
 ---
 
-## 🔒 Privacy Guarantees
-
-1. **No Keylogging**: EAOS measures only timing cadence (inter-key intervals, backspace rates). **Typed text is never captured or stored**.
-2. **Camera Privacy Controls**: The webcam is used solely for local in-memory facial engagement and ambient light detection when enabled. You can toggle "Camera Sensing Integration" off in Settings at any time, in which case the camera is **strictly closed** and EAOS operates seamlessly using non-camera behavioral signals.
-3. **In-Memory Frame Processing**: Camera frames are processed strictly in RAM; **raw camera frames are never saved to disk**.
-
----
-
-## 📊 Adaptive Score (AS)
+## 📊 Adaptive Score (AS) Formulation
 
 The **Adaptive Score (AS)** is a normalized index between `0.00` and `1.00` composed of four weighted components:
 
 $$\text{AS} = w_{\text{emotion}} \cdot E + w_{\text{context}} \cdot C + w_{\text{workload}} \cdot W + w_{\text{personalization}} \cdot P$$
 
-- **Emotion Component ($E$, 35%)**: Valence and focus derived from keyboard friction, flow indicators, and facial engagement.
-- **Context Component ($C$, 20%)**: Productive relevance of the frontmost application (Coding, Writing, Communications, etc.).
-- **Workload Component ($W$, 30%)**: Cognitive demand index derived from typing cadence, system CPU load, and window switching.
-- **Personalization Component ($P$, 15%)**: Measures the degree of deviation from your learned personal baseline.
+* **Emotion Component ($E$, 35%)**: Valence and focus derived from keyboard cadence, error backspaces, and facial engagement.
+* **Context Component ($C$, 20%)**: Task category of the frontmost application (Coding, Writing, Browsing, Communication).
+* **Workload Component ($W$, 30%)**: Cognitive demand index derived from typing cadence, CPU load, and window switching frequency.
+* **Personalization Component ($P$, 15%)**: Measures the degree of deviation from your learned personal baseline ($z$-scores).
 
 ---
 
-## 🖥️ Automatic macOS Actions (OS Actuator)
+## 🔒 Privacy Guarantees
 
-At the end of each 5-minute cycle, the Decision Engine automatically executes one of the following adaptations:
-
-- **Dark Mode (`ENABLE_DARK_MODE`)**: Activates macOS Dark Appearance if low ambient light or eye strain is detected.
-- **Light Mode (`DISABLE_DARK_MODE`)**: Restores standard appearance when room lighting is bright.
-- **Focus Mode (`ENABLE_FOCUS_MODE`)**: Mutes system notification audio and declutters non-essential background windows during elevated workload or high personal deviation.
-- **Restore Focus (`DISABLE_FOCUS_MODE`)**: Restores standard alert volume when work ease returns.
-- **Wellness Break Alert (`SUGGEST_BREAK`)**: Sounds an audible chime, provides speech prompt, and suggests taking a stretch break during sustained fatigue.
-- **Developer Resource (`SUGGEST_DEBUG_RESOURCE`)**: Opens documentation reference when high friction/backspaces occur during coding.
-- **No Action (`NO_ACTION`)**: Confirms user state is nominal and avoids unnecessary changes.
+1. **No Keylogging**: EAOS measures only timing cadence (inter-key intervals, backspace rates). **Typed characters and text are never captured, logged, or transmitted**.
+2. **Scheduled Camera Window**: The webcam is activated solely during the 1-minute input sensing window, then **immediately released** for the remainder of the cycle.
+3. **In-Memory Frame Processing**: Camera frames are processed strictly in RAM; **raw camera frames are never saved to disk**.
+4. **Full Offline Execution**: All machine learning, computer vision, and state evaluation occur 100% locally on your machine with zero telemetry sent to external servers.
 
 ---
 
-## 🚀 Getting Started (macOS)
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- macOS 12+ (tested on Apple Silicon and Intel MacBooks)
-- Python 3.10+
-- Node.js 18+
+* macOS 12+ (tested on Apple Silicon M-series and Intel MacBooks)
+* Python 3.10+
+* Node.js 18+
 
-### Step 1: Start Backend (FastAPI)
+### Step 1: Clone and Configure Shortcuts
+
+Ensure the 4 native macOS Shortcuts exist in your Shortcuts app:
+1. `Set Appearance` (Accepts Text: `Dark` or `Light`)
+2. `Turn On DND` (Accepts Text: `On` or `Off`)
+3. `Set Volume` (Accepts Text/Number: `0` to `100`)
+4. `Set Brightness` (Accepts Text/Number: `0.05` to `1.00`)
+
+*(See [docs/SETUP_MACOS.md](docs/SETUP_MACOS.md) for full shortcut creation steps)*
+
+### Step 2: Start Backend (FastAPI)
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --port 8765
+uvicorn app.main:app --port 8765 --host 127.0.0.1
 ```
 
-### Step 2: Start Frontend (Vite Dashboard)
+### Step 3: Start Frontend (Vite + React)
 
-In a new terminal window:
+In a second terminal window:
 
 ```bash
 cd frontend
@@ -115,24 +159,40 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173` in your browser. The dashboard connects via WebSocket to the live backend and displays the real 5-minute countdown timer.
+Open **`http://127.0.0.1:5173`** in your browser to access the live dashboard.
 
-### Step 3 (Optional): Run Electron Desktop Shell
+---
 
-In a third terminal window:
+## 📂 Project Structure
 
-```bash
-cd electron
-npm install
-npm start
+```text
+eaos-full-project/
+├── backend/
+│   ├── app/
+│   │   ├── core/               # Configuration and environment settings
+│   │   ├── db/                 # SQLite schema, migrations, and CRUD operations
+│   │   ├── decision_engine/    # LinUCB bandit policy, Adaptive Score, and rules
+│   │   ├── sensors/            # Multimodal sensors: Keyboard, Mouse, Context, Camera
+│   │   ├── services/           # Actuator (Shortcuts), Scheduler, StateBuilder, Notification
+│   │   └── main.py             # FastAPI REST endpoints and WebSocket server
+│   └── requirements.txt        # Python dependencies (OpenCV, FastAPI, uvicorn, pynput)
+├── frontend/
+│   ├── src/
+│   │   ├── components/         # CameraBox, QuickOSControl, Cards, Modal
+│   │   ├── pages/              # Overview, AI State, Analytics, Actions, History, Privacy, Settings
+│   │   ├── services/           # REST and WebSocket client
+│   │   └── styles.css          # Design system, glassmorphism, animations
+│   ├── package.json            # Vite, React, Lucide, Recharts dependencies
+│   └── vite.config.ts
+├── docs/
+│   ├── ARCHITECTURE.md         # Deep-dive architecture and component pipeline
+│   ├── RESEARCH_DOCUMENTATION.md# Research paper, mathematical formulations, and metrics
+│   └── SETUP_MACOS.md          # Comprehensive macOS setup and permissions guide
+└── README.md                   # Project overview and quickstart guide
 ```
 
 ---
 
-## 🔐 macOS Permissions
+## 📄 License
 
-For live behavioral sensing on macOS:
-
-1. **Accessibility**: Open **System Settings > Privacy & Security > Accessibility** and ensure your terminal app (Terminal, iTerm2, or VS Code) is enabled so active application detection and mouse tracking can function.
-2. **Input Monitoring**: Open **System Settings > Privacy & Security > Input Monitoring** and allow your terminal for keyboard cadence detection.
-3. **Camera**: macOS will prompt to grant Camera access to Terminal / Python when camera sensing is enabled.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
