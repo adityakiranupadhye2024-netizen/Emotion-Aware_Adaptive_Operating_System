@@ -160,7 +160,7 @@ To capture behavioral signals (keyboard typing cadence, mouse dynamics, active a
   lsof -ti :8765 | xargs kill -9
   ```
 * **Camera shows "Hardware Released" or "Camera in Standby"**:
-  * This is normal behavior during the 4-minute adaptation phase. Click **`▶ Live Cam Preview`** on the dashboard to view the camera stream on demand.
+  * This is normal behavior during the 1-minute adaptation phase of the 2-minute cycle. Click **`▶ Live Cam Preview`** on the dashboard to view the camera stream on demand.
 * **OpenCV VideoCapture Error**:
   * Ensure no other application (FaceTime, Photo Booth, Zoom) is holding an exclusive lock on the camera device.
 * **Shortcut not found error**:

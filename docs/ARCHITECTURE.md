@@ -21,11 +21,11 @@ This document provides a technical overview of the **Emotion-Aware Adaptive Oper
 │                              FASTAPI BACKEND CORE (PORT 8765)                          │
 │                                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                       WALL-CLOCK CYCLE SCHEDULER (5-MIN BOUNDARIES)              │  │
+│  │                       WALL-CLOCK CYCLE SCHEDULER (2-MIN CONTINUOUS CYCLE)        │  │
 │  │                                                                                  │  │
-│  │   [00:00 - 01:00] INPUT COLLECTION WINDOW    [01:00 - 05:00] ADAPTATION WINDOW   │  │
-│  │   • Camera open & sensing                   • Camera closed & released (privacy) │  │
-│  │   • Real sensor accumulation                • OS adaptation active on macOS      │  │
+│  │   [SLOT 2n: 00:00 - 01:00] INPUT COLLECTION   [SLOT 2n+1: 01:00 - 02:00] ADAPT   │  │
+│  │   • Camera open & sensing window              • Camera closed & released         │  │
+│  │   • Multimodal sensor accumulation            • OS adaptation active on macOS    │  │
 │  └───────────────────────────▲──────────────────────────────────────▲───────────────┘  │
 │                              │                                      │                  │
 │       ┌──────────────────────┴───────┐              ┌───────────────┴──────────────┐   │
@@ -96,24 +96,25 @@ EAOS captures human-computer interaction (HCI) telemetry entirely in user space:
 
 ---
 
-## 3. Continuous 5-Minute Wall-Clock Cycle
+## 3. Continuous 2-Minute Wall-Clock Cycle
 
-EAOS eliminates timing drift by binding cycle boundaries directly to absolute Unix epoch time (`time.time() // 300`):
+EAOS eliminates timing drift by binding cycle boundaries directly to absolute Unix epoch time (`time.time() // 60`):
 
 ```text
- 00:00                     01:00                                            05:00
+ 00:00 (Even Slot)         01:00 (Odd Slot)                                 02:00
 ┌─────────────────────────┬──────────────────────────────────────────────────────┐
-│  INPUT COLLECTION (1m)  │                ADAPTATION PHASE (4m)                 │
-│  • Camera open          │  • Camera closed & released                          │
+│  INPUT COLLECTION (1m)  │                ADAPTATION PHASE (1m)                 │
+│  • Camera open & sensing│  • Camera closed & released for privacy              │
 │  • Multimodal sensing   │  • OS adaptation remains active on macOS             │
 │  • Buffer accumulation  │  • Continuous behavioral monitoring                  │
 └─────────────────────────┴──────────────────────────────────────────────────────┘
                           ▲
-                          │ Boundary Evaluation:
+                          │ Boundary Evaluation (at 60s):
                           │ 1. Finalize telemetry window
                           │ 2. Evaluate Adaptive Score (AS)
                           │ 3. Execute macOS Shortcut
                           │ 4. Update EWMA Personal Baseline
+                          │ 5. Release camera & enter 1-min adaptation
 ```
 
 ---
@@ -126,9 +127,11 @@ Instead of hardcoded thresholds, EAOS personalizes state evaluation for each use
    Tracks moving mean $\mu_t$ and variance $\sigma^2_t$ for workload, typing rate, backspace rate, and mouse jitter:
    $$\mu_t = \alpha x_t + (1 - \alpha)\mu_{t-1}$$
    $$\sigma^2_t = (1 - \alpha)(\sigma^2_{t-1} + \alpha(x_t - \mu_{t-1})^2)$$
-2. **Distress Dampening**:
+2. **Initial Calibration (5 Cycles = 10 Minutes)**:
+   The first 5 cycles run in `CALIBRATING` mode to accumulate stable statistical distributions before individual deviations trigger adaptations.
+3. **Distress Dampening**:
    Observations flagged with acute distress (severe frustration or exhaustion) use a reduced $\alpha$ to prevent temporary anomalies from corrupting the baseline.
-3. **Normalized Z-Scores**:
+4. **Normalized Z-Scores**:
    $$z = \frac{x - \mu}{\sigma}$$
    Used to detect when a user's current behavior significantly deviates from their individual historical habits.
 

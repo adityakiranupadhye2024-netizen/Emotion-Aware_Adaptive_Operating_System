@@ -6,7 +6,7 @@
 
 ## 1. Abstract
 
-Modern operating systems treat users identically regardless of whether they are deep in flow state, battling cognitive fatigue, or experiencing intense task friction. This research introduces **EAOS (Emotion-Aware Adaptive Operating System)**, a zero-prompt, user-space desktop adaptation system that continuously infers a user's affective and cognitive state from real multimodal behavioral signals (facial affect, keyboard typing cadence, mouse dynamics, active application context, and cognitive workload) and translates those inferences into native operating system adaptations—appearance modes, notification suppression, audio muting, and contextual break suggestions—in repeating 5-minute wall-clock cycles.
+Modern operating systems treat users identically regardless of whether they are deep in flow state, battling cognitive fatigue, or experiencing intense task friction. This research introduces **EAOS (Emotion-Aware Adaptive Operating System)**, a zero-prompt, user-space desktop adaptation system that continuously infers a user's affective and cognitive state from real multimodal behavioral signals (facial affect, keyboard typing cadence, mouse dynamics, active application context, and cognitive workload) and translates those inferences into native operating system adaptations—appearance modes, notification suppression, audio muting, and contextual break suggestions—in repeating **2-minute wall-clock cycles** (1-minute input collection + 1-minute adaptation).
 
 The core research contribution is the **Adaptive Score (AS)** framework: a personalized, mathematically grounded fusion of multimodal emotion, task context, cognitive workload, and an online Exponentially Weighted Moving Average (**EWMA**) behavioral baseline that drives an explore-exploit **LinUCB contextual bandit** policy engine. All computer vision, inference, and state calculations execute strictly on-device in RAM without cloud dependencies, demonstrating that affective computing can be delivered with uncompromising user privacy.
 
@@ -99,18 +99,38 @@ Where:
 
 ---
 
-## 4. On-Device Privacy Architecture
+## 4. Continuous 2-Minute Wall-Clock Cycle Execution
+
+The execution loop operates on alternating 60-second slots:
+
+1. **Input Collection Window (Minutes 0:00–1:00, Even Slots)**:
+   * Real sensor accumulation (keyboard, mouse, context, CPU load).
+   * Hardware webcam activates to analyze facial affect in memory.
+2. **Boundary Assessment & Actuation (At Exactly 1:00)**:
+   * Aggregated window metrics evaluated against individual EWMA baseline.
+   * Adaptive Score computed; LinUCB policy selects optimal OS intervention.
+   * Native macOS Shortcut (`Set Appearance`, `Turn On DND`, `Set Volume`, `Set Brightness`) executed.
+   * Personal baseline statistics updated; webcam powered down.
+3. **Adaptation Window (Minutes 1:00–2:00, Odd Slots)**:
+   * Webcam hardware strictly closed to preserve privacy.
+   * Operating system adaptation remains active on macOS.
+   * Behavioral ease and response monitored.
+   * Timer resets to begin the next 2-minute cycle at 2:00.
+
+---
+
+## 5. On-Device Privacy Architecture
 
 Affective computing systems often face legitimate privacy resistance. EAOS addresses this by design:
 
 1. **Strictly In-Memory Frame Processing**: The camera feed is analyzed in RAM via OpenCV. No raw frames, video clips, or face embeddings are ever written to disk or transmitted across networks.
-2. **1-Minute Sensing Cycle**: The webcam hardware is initialized only during the 1-minute input collection window and is immediately powered down and released during the 4-minute adaptation phase.
+2. **1-Minute Sensing Cycle**: The webcam hardware is initialized only during the 1-minute input collection window and is immediately powered down and released during the 1-minute adaptation phase.
 3. **No Keystroke Content Capture**: Key codes and characters are discarded immediately. The system records only timestamp deltas ($\Delta t = t_i - t_{i-1}$) and the count of backspace key events.
 4. **Local Hardware Actuation**: Adaptations execute locally via macOS Shortcuts and AppleScript APIs with zero external cloud dependencies.
 
 ---
 
-## 5. Experimental Evaluation Framework
+## 6. Experimental Evaluation Framework
 
 The system provides empirical tracking to validate four primary research hypotheses:
 
