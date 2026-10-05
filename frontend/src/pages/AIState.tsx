@@ -1,4 +1,5 @@
 import { LiveState } from '../types';
+import { CameraBox } from '../components/CameraBox';
 
 function formatTimer(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -81,6 +82,13 @@ export default function AIState({ s }: { s: LiveState | null }) {
           </div>
         </div>
       </div>
+
+      {/* Real-time AI Vision & Facial Emotion Cam Box */}
+      <CameraBox
+        emotion={s?.emotion}
+        cameraState={s?.inputs?.camera}
+        cycle={s?.cycle}
+      />
 
       {/* Personalization Section */}
       <section className="card" style={{ marginBottom: 20, borderColor: 'rgba(139, 92, 246, 0.35)' }}>

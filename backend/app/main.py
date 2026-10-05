@@ -3,7 +3,8 @@ import time
 import logging
 from typing import Optional
 from datetime import datetime, timezone
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.services.notification import notification_service
@@ -145,6 +146,10 @@ def get_current_telemetry_snapshot():
 
     # Calculate real-time Adaptive Score (AS) incorporating personalization
     as_score, as_components = engine.calculate_as(state)
+
+    dominant_emo = state.get('emotion', {}).get('dominant', 'Focused')
+    conf_emo = state.get('emotion', {}).get('confidence', 0.85)
+    camera.set_current_emotion(dominant_emo, conf_emo)
 
     # Send periodic telemetry sample to current 5-minute observation window
     scheduler.sample_telemetry(
@@ -705,6 +710,41 @@ def analytics_dnd():
 @app.get('/api/v1/analytics/camera')
 def analytics_camera():
     return get_camera_sensing_stats()
+
+@app.get('/api/v1/camera/stream')
+def camera_stream():
+    """Streams live MJPEG camera feed with face tracking and real-time emotion HUD."""
+    def frame_generator():
+        while True:
+            frame_bytes = camera.get_stream_frame()
+            if frame_bytes:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.06)  # ~16 FPS
+    return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
+
+@app.get('/api/v1/camera/frame')
+def camera_single_frame():
+    """Returns a single current JPEG image frame for static previews or polling fallback."""
+    frame_bytes = camera.get_stream_frame()
+    return Response(content=frame_bytes, media_type='image/jpeg')
+
+@app.post('/api/v1/camera/preview')
+def set_camera_preview(payload: dict):
+    """Enables or disables continuous live camera preview mode."""
+    preview = bool(payload.get('preview', True))
+    camera.set_preview_requested(preview)
+    if preview:
+        camera.open_camera()
+    else:
+        if scheduler.phase == "ADAPTATION":
+            camera.close_camera(force=True)
+    return {
+        'ok': True,
+        'preview_requested': camera.preview_requested,
+        'camera_active': camera.is_active(),
+        'status': camera.status_text
+    }
 
 @app.get('/api/v1/settings')
 def get_all_settings():

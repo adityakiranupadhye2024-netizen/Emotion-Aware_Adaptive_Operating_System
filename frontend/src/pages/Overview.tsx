@@ -4,6 +4,7 @@ import { LiveState, DecisionRecord } from '../types';
 import { DecisionDetailsModal } from '../components/DecisionDetailsModal';
 import { sendDecisionFeedback } from '../services/api';
 import { QuickOSControl } from '../components/QuickOSControl';
+import { CameraBox } from '../components/CameraBox';
 
 function formatTimer(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -278,6 +279,13 @@ export default function Overview({ s, online }: { s: LiveState | null; online: b
           </div>
         </div>
       </section>
+
+      {/* Real-time AI Vision & Facial Emotion Cam Box */}
+      <CameraBox
+        emotion={s?.emotion}
+        cameraState={s?.inputs?.camera}
+        cycle={s?.cycle}
+      />
 
       {/* Real OS Mode Switcher & Actuator Testing Controls */}
       <QuickOSControl

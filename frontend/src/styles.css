@@ -1329,5 +1329,16 @@ header {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-
-
+@keyframes eaos-scanline {
+  0% {
+    top: 0%;
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0.2;
+  }
+}

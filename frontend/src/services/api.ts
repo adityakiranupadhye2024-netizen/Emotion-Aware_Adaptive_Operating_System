@@ -224,6 +224,19 @@ export async function executeOSAction(action: string, reason?: string, value?: n
   return r.json();
 }
 
+export function getCameraStreamUrl(): string {
+  return `${BASE}/api/v1/camera/stream`;
+}
+
+export async function setCameraPreview(preview: boolean) {
+  const r = await fetch(`${BASE}/api/v1/camera/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ preview }),
+  });
+  if (!r.ok) throw new Error('Failed to toggle camera preview');
+  return r.json();
+}
 
 export function connectLive(onData: (d: any) => void, onStatus: (ok: boolean) => void) {
   const wsUrl = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8765/ws/live-state';
