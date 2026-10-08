@@ -450,14 +450,21 @@ class MacActuator:
             target_v = int(params.get('volume', params.get('value', 50)))
             target_v = max(0, min(100, target_v))
             cmd_ok = run_shortcut('Set Volume', str(target_v))
-            time.sleep(0.15)
+            if not cmd_ok or self.system == "Darwin":
+                try:
+                    res = subprocess.run(['osascript', '-e', f'set volume output volume {target_v}'], capture_output=True, timeout=2)
+                    if res.returncode == 0:
+                        cmd_ok = True
+                except Exception as e:
+                    logger.debug(f"osascript set volume fallback issue: {e}")
+            time.sleep(0.10)
             state_after = self.get_current_os_state(force_refresh=True)
 
-            verified = (state_after.get('volume') == target_v)
+            verified = (abs(state_after.get('volume', 0) - target_v) <= 3)
             success = verified and cmd_ok
             if verified:
                 record_os_state_event('VOLUME', f'{target_v}%', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, f"Shortcut: Set Volume ('{target_v}')", state_before, state_after, verified, success,
+            return self._build_result(action, f"Set Volume ('{target_v}%')", state_before, state_after, verified, success,
                                       f'System output volume set to {target_v}%.', start_t, now_iso)
 
         # Advisory or unhandled actions

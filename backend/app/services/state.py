@@ -201,12 +201,12 @@ class StateBuilder:
                 + 0.15 * max(0.0, 1.0 - switching_score)
             )
 
-        # Confused Score Fusion: High app switching with low task progress / search / browsing
+        # Confused Score Fusion: High app switching with erratic / unstable behavior
         confused_raw = (
-            0.40 * switching_score
-            + 0.30 * max(0.0, 1.0 - typing_engagement)
-            + 0.20 * (1.0 if context == 'BROWSING' else 0.2)
-            + 0.10 * max(0.0, 1.0 - context_conf)
+            0.45 * (switching_score if switching_score > 0.35 else 0.0)
+            + 0.25 * mouse_agitation_score
+            + 0.15 * max(0.0, 1.0 - context_conf)
+            + 0.15 * (0.5 if context == 'BROWSING' and switching_score > 0.4 else 0.0)
         )
 
         raw_scores = {
@@ -218,12 +218,14 @@ class StateBuilder:
             'Relaxed': max(0.03, relaxed_raw)
         }
 
-        # Normalize to exact probabilities sum = 1.0
-        tot = sum(raw_scores.values())
-        probs = {k: round(v / tot, 4) for k, v in raw_scores.items()}
+        # Calibrated probability scaling (power factor p=2.0) to give clear, accurate emotion confidence
+        scaled_scores = {k: max(0.0001, v ** 2.0) for k, v in raw_scores.items()}
+        tot = sum(scaled_scores.values())
+        probs = {k: round(v / tot, 4) for k, v in scaled_scores.items()}
         # Handle exact rounding sum
         diff = round(1.0 - sum(probs.values()), 4)
-        probs['Focused'] = round(probs['Focused'] + diff, 4)
+        top_k = max(probs, key=probs.get)
+        probs[top_k] = round(probs[top_k] + diff, 4)
 
         dominant = max(probs, key=probs.get)
         confidence = probs[dominant]

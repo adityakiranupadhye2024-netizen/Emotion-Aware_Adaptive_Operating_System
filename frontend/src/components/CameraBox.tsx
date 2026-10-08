@@ -404,21 +404,6 @@ export const CameraBox: React.FC<CameraBoxProps> = ({
             }}>
               {cameraState?.eyes_detected ? '👀 Eyes Engaged' : '😑 Eye Tracking'}
             </span>
-
-            {cameraState?.smile_detected && (
-              <span style={{
-                fontSize: '0.74rem',
-                padding: '4px 10px',
-                borderRadius: 6,
-                background: 'rgba(15, 23, 42, 0.85)',
-                border: '1px solid rgba(52, 211, 153, 0.4)',
-                color: '#34d399',
-                fontWeight: 600,
-                backdropFilter: 'blur(6px)'
-              }}>
-                😊 Smile Detected
-              </span>
-            )}
           </div>
 
           <span style={{

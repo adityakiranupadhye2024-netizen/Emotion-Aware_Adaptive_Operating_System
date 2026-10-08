@@ -46,7 +46,7 @@ class CameraSensor:
         inference_interval: float = 0.35,
         ema_alpha: float = 0.25,
         stale_timeout_sec: float = 5.0,
-        detector_backend: str = "opencv"
+        detector_backend: str = "ssd"
     ):
         self._lock = threading.Lock()
         self.cap = None
@@ -353,18 +353,17 @@ class CameraSensor:
 
         if primary_face is not None:
             fx, fy, fw, fh = primary_face
-            # Add subtle padding around detected face bounding box
-            pad_x = int(fw * 0.15)
-            pad_y = int(fh * 0.15)
+            # Add generous padding around detected face bounding box to capture brow and chin
+            pad_x = int(fw * 0.22)
+            pad_y = int(fh * 0.22)
             x1 = max(0, fx - pad_x)
             y1 = max(0, fy - pad_y)
             x2 = min(w, fx + fw + pad_x)
             y2 = min(h, fy + fh + pad_y)
 
-            if (x2 - x1) >= 40 and (y2 - y1) >= 40:
+            if (x2 - x1) >= 48 and (y2 - y1) >= 48:
                 crop_target = frame[y1:y2, x1:x2]
-                # If we already localized the primary face, skip secondary detection for speed
-                use_backend = "skip"
+                use_backend = self.detector_backend
 
         try:
             analysis = DeepFace.analyze(
@@ -373,12 +372,20 @@ class CameraSensor:
                 enforce_detection=False,
                 detector_backend=use_backend
             )
-        except Exception as e:
-            logger.debug(f"DeepFace.analyze error: {e}")
-            with self._lock:
-                self.emotion_available = False
-                self.emotion_stale = True
-            return
+        except Exception:
+            try:
+                analysis = DeepFace.analyze(
+                    img_path=crop_target,
+                    actions=['emotion'],
+                    enforce_detection=False,
+                    detector_backend="opencv"
+                )
+            except Exception as e2:
+                logger.debug(f"DeepFace.analyze error: {e2}")
+                with self._lock:
+                    self.emotion_available = False
+                    self.emotion_stale = True
+                return
 
         duration_ms = round((time.time() - t0) * 1000, 1)
 
@@ -587,24 +594,6 @@ class CameraSensor:
                 cv2.circle(frame, (eye_x2, eye_y), 4, (255, 255, 255), -1)
                 cv2.circle(frame, (eye_x2, eye_y), 10, color, 1)
 
-            # Real Dynamic DeepFace Emotion Badge right above face
-            if self.emotion_available and not self.emotion_stale:
-                pct = int(self.emotion_confidence * 100)
-                tag_text = f"FACIAL: {self.dominant_facial_emotion.upper()} ({pct}%)"
-            else:
-                tag_text = "FACE DETECTED"
-
-            badge_y = fy - 12 if fy > 45 else fy + fh + 32
-            badge_w = max(220, fw)
-
-            cv2.rectangle(frame, (fx, badge_y - 24), (fx + badge_w, badge_y + 4), (15, 23, 42), -1)
-            cv2.rectangle(frame, (fx, badge_y - 24), (fx + badge_w, badge_y + 4), color, 1)
-            cv2.putText(frame, tag_text, (fx + 8, badge_y - 7),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
-
-            if smiles_found:
-                cv2.putText(frame, "SMILE DETECTED", (fx + 8, badge_y + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, (52, 211, 153), 1, cv2.LINE_AA)
         else:
             self.latest_face_box = None
             cx, cy = w // 2, h // 2

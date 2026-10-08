@@ -303,42 +303,6 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
             {loadingAction === 'DISABLE_FOCUS_MODE' ? 'Restoring...' : 'Turn off DND & restore alerts'}
           </span>
         </button>
-
-        {/* 5. Volume / Mute Button */}
-        <button
-          onClick={() => handleAction('TOGGLE_MUTE', isMuted ? 'User unmuted system volume' : 'User muted system volume')}
-          disabled={loadingAction !== null}
-          style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            background: isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.2)',
-            border: `1px solid ${isMuted ? '#ef4444' : 'rgba(16, 185, 129, 0.35)'}`,
-            color: '#f8fafc',
-            cursor: loadingAction ? 'not-allowed' : 'pointer',
-            textAlign: 'left',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            transition: 'all 0.15s ease'
-          }}
-          title={isMuted ? 'Click to unmute macOS system audio' : 'Click to mute macOS system audio'}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-              {isMuted ? '🔇 Audio Muted' : '🔊 Volume Button'}
-            </span>
-            <span style={{
-              color: isMuted ? '#f87171' : '#34d399',
-              fontSize: '0.8rem',
-              fontWeight: 700
-            }}>
-              {isMuted ? 'MUTED' : `${volumePct}%`}
-            </span>
-          </div>
-          <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'TOGGLE_MUTE' ? 'Updating...' : (isMuted ? 'Click to unmute sound' : 'Click to mute sound')}
-          </span>
-        </button>
       </div>
 
       {/* Dual Sliders: Display Brightness & System Volume */}
