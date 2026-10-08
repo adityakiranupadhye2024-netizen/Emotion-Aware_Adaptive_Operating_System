@@ -248,14 +248,17 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
           </span>
         </button>
 
-        {/* 3. Enable Focus / DND */}
+        {/* 3. Focus / DND Mode Toggle */}
         <button
-          onClick={() => handleAction('ENABLE_FOCUS_MODE', 'User turned on Focus / DND Mode')}
+          onClick={() => handleAction(
+            isFocusOn ? 'DISABLE_FOCUS_MODE' : 'ENABLE_FOCUS_MODE',
+            isFocusOn ? 'User turned off DND Mode' : 'User turned on Focus / DND Mode'
+          )}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',
             borderRadius: '8px',
-            background: isFocusOn ? 'rgba(6, 182, 212, 0.35)' : 'rgba(255, 255, 255, 0.05)',
+            background: isFocusOn ? 'rgba(6, 182, 212, 0.30)' : 'rgba(255, 255, 255, 0.05)',
             border: `1px solid ${isFocusOn ? '#06b6d4' : 'rgba(255, 255, 255, 0.12)'}`,
             color: '#f8fafc',
             cursor: loadingAction ? 'not-allowed' : 'pointer',
@@ -265,42 +268,28 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
             gap: 2,
             transition: 'all 0.15s ease'
           }}
-          title="Engage native macOS Focus / Do Not Disturb"
+          title={isFocusOn ? 'Click to turn off native macOS Focus / Do Not Disturb' : 'Click to turn on native macOS Focus / Do Not Disturb'}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔕 Turn ON DND</span>
-            {isFocusOn && <span style={{ color: '#34d399', fontSize: '0.8rem' }}>✓ ACTIVE</span>}
+            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+              {isFocusOn ? '🔕 Turn OFF DND' : '🔔 Turn ON DND'}
+            </span>
+            <span style={{
+              color: isFocusOn ? '#22d3ee' : '#34d399',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: '12px',
+              background: isFocusOn ? 'rgba(6, 182, 212, 0.2)' : 'rgba(52, 211, 153, 0.18)',
+              border: `1px solid ${isFocusOn ? 'rgba(6, 182, 212, 0.4)' : 'rgba(52, 211, 153, 0.35)'}`
+            }}>
+              {isFocusOn ? '✓ DND ON' : '✓ NORMAL'}
+            </span>
           </div>
           <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'ENABLE_FOCUS_MODE' ? 'Engaging...' : 'Silence notifications & DND'}
-          </span>
-        </button>
-
-        {/* 4. Disable Focus / DND */}
-        <button
-          onClick={() => handleAction('DISABLE_FOCUS_MODE', 'User turned off DND Mode')}
-          disabled={loadingAction !== null}
-          style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            background: !isFocusOn ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-            border: `1px solid ${!isFocusOn ? '#10b981' : 'rgba(255, 255, 255, 0.12)'}`,
-            color: '#f8fafc',
-            cursor: loadingAction ? 'not-allowed' : 'pointer',
-            textAlign: 'left',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            transition: 'all 0.15s ease'
-          }}
-          title="Turn off native macOS Focus / Do Not Disturb"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🔔 Turn OFF DND</span>
-            {!isFocusOn && <span style={{ color: '#34d399', fontSize: '0.8rem' }}>✓ NORMAL</span>}
-          </div>
-          <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-            {loadingAction === 'DISABLE_FOCUS_MODE' ? 'Restoring...' : 'Turn off DND & restore alerts'}
+            {loadingAction === 'ENABLE_FOCUS_MODE' || loadingAction === 'DISABLE_FOCUS_MODE'
+              ? (isFocusOn ? 'Restoring alerts...' : 'Engaging DND...')
+              : (isFocusOn ? 'Silence active · Click to turn off DND' : 'Silence notifications & DND')}
           </span>
         </button>
       </div>
