@@ -513,9 +513,11 @@ class DecisionEngine:
         relaxed_signal = float(evidence.get('relaxed_signal', probs.get('Relaxed', 0.0)))
 
         cam_conditions = cam.get('conditions', {})
-        ambient = float(cam.get('ambient_light', 0.50))
-        dim_proxy = bool(cam_conditions.get('dim_proxy', ambient < 0.25))
-        bright_proxy = bool(cam_conditions.get('bright_proxy', ambient > 0.65))
+        ambient = float(cam.get('average_visual_light_proxy', cam.get('ambient_light', 0.50)))
+        dim_thresh = float(settings.thresholds.get('ambient_dim_threshold', 0.40))
+        bright_thresh = float(settings.thresholds.get('ambient_bright_threshold', 0.60))
+        dim_proxy = bool(cam_conditions.get('dim_proxy') or ambient < dim_thresh)
+        bright_proxy = bool(cam_conditions.get('bright_proxy') or ambient > bright_thresh)
         cam_valid = bool(cam_conditions.get('valid_camera_observation', cam.get('confidence', 0.0) >= 0.5))
 
         # Synchronize with ground truth OS state
@@ -626,80 +628,82 @@ class DecisionEngine:
 
         # 4. ACTIVE WORK CONTEXTS (CODING, WRITING, STUDYING, GENERAL_WORK)
         else:
-            # Step A: STRONG FRUSTRATION -> MUTE_AUDIO (Part 9, Action 3)
-            # Requires multi-modal agreement (kb correction + mouse agitation) or severe frustration signal
+            # Step A: FRUSTRATION -> MUTE_AUDIO
             is_frustrated = (
-                (frustration_signal >= 0.60 and (backspace_rate >= 0.10 or mouse_agitation >= 0.35))
-                or (frustration_signal >= 0.75)
+                (frustration_signal >= 0.35 and (backspace_rate >= 0.05 or mouse_agitation >= 0.15))
+                or (frustration_signal >= 0.50)
+                or (backspace_rate >= 0.10)
             )
             if is_frustrated and not self.audio_muted:
                 action = 'MUTE_AUDIO'
                 reason = (
-                    f"Elevated typing correction ({int(backspace_rate * 100)}%) and cursor agitation "
-                    f"during {context.lower()} session indicated sustained frustration. Audio was muted to minimize distraction."
+                    f"Typing correction ({int(backspace_rate * 100)}%) and emotional friction "
+                    f"during {context.lower()} session indicated frustration. Audio muted to restore focus."
                 )
                 self.audio_muted = True
                 contributing_factors.append(f"Typing correction {int(backspace_rate * 100)}%")
-                contributing_factors.append(f"Mouse agitation {mouse_agitation:.2f}")
+                contributing_factors.append(f"Frustration signal {frustration_signal:.2f}")
 
-            # Step B: STRONG FATIGUE / VISUAL STRAIN -> REDUCE_BRIGHTNESS (Part 9, Action 7)
-            elif (fatigue_signal >= 0.55 or (fatigue_signal >= 0.45 and cam_conditions.get('persistent_low_eye_visibility', False))) and curr_brightness > 0.45:
-                action = 'REDUCE_BRIGHTNESS'
-                reason = f'Elevated visual fatigue ({int(fatigue_signal * 100)}%) detected; display brightness reduced to relieve eye strain.'
-                contributing_factors.append('Visual fatigue indicators')
-                contributing_factors.append(f'Current brightness {int(curr_brightness * 100)}% > 45%')
-
-            # Step C: HIGH WORKLOAD / DEEP FOCUS -> ENABLE_FOCUS_MODE (Part 9, Action 1)
-            # Must satisfy: workload >= 0.60 OR workload z-score >= +1.5 OR focus_signal >= 0.65 with productive context
-            # AND typing or mouse activity >= 0.35 AND context_conf >= 0.60 AND Focus is OFF
+            # Step B: FATIGUE / VISUAL STRAIN -> REDUCE_BRIGHTNESS
             elif (
-                (workload >= 0.60 or workload_z >= 1.5)
-                and context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']
-                and (typing_activity_ratio >= 0.35 or mouse_active_ratio >= 0.35)
-                and context_conf >= 0.60
-                and not self.in_focus_mode
-            ):
-                action = 'ENABLE_FOCUS_MODE'
-                if workload_z >= 1.5 and not is_calibrating:
-                    reason = f'Workload was significantly higher than personal baseline (z={workload_z:+.1f}) while {context.lower()}; Focus Mode engaged.'
-                    personal_note = f"Personal workload deviation: {workload_dev:+.2f}"
-                    contributing_factors.append('Personal baseline deviation exceeded')
-                else:
-                    reason = f'Elevated cognitive workload ({int(workload * 100)}%) in {context.lower()}; desktop notifications silenced & Focus Mode engaged.'
-                    contributing_factors.append('High cognitive workload')
-                self.in_focus_mode = True
+                (fatigue_signal >= 0.45 or (fatigue_signal >= 0.35 and cam_conditions.get('persistent_low_eye_visibility', False)))
+            ) and curr_brightness > 0.45:
+                action = 'REDUCE_BRIGHTNESS'
+                reason = f'Visual fatigue ({int(fatigue_signal * 100)}%) detected; display brightness lowered to relieve eye strain.'
+                contributing_factors.append('Visual fatigue indicators')
+                contributing_factors.append(f'Current brightness {int(curr_brightness * 100)}%')
 
-            # Step D: VISUAL ENVIRONMENT LIGHTING (Part 9, Actions 5 & 6)
-            # ENABLE_DARK_MODE: camera valid AND dim proxy persistently < 0.25 AND productive context AND (fatigue >= 0.35 OR workload >= 0.40) AND not already dark
-            elif cam_valid and dim_proxy and (fatigue_signal >= 0.35 or workload >= 0.40) and not self.dark_mode_active:
+            # Step C: VISUAL ENVIRONMENT LIGHTING (Dark / Light Mode)
+            elif cam_valid and dim_proxy and not self.dark_mode_active:
                 action = 'ENABLE_DARK_MODE'
-                reason = f'Low ambient illumination proxy ({ambient:.2f} < 0.25) during focused work; macOS Dark Mode engaged for eye comfort.'
+                reason = f'Ambient illumination proxy ({ambient:.2f}) indicates low-light environment; macOS Dark Mode engaged for visual comfort.'
                 self.dark_mode_active = True
-                contributing_factors.append('Low ambient illumination')
+                contributing_factors.append('Ambient light & visual comfort')
 
-            # DISABLE_DARK_MODE: camera valid AND bright proxy persistently > 0.65 AND user actively working AND fatigue not elevated AND already dark
-            elif cam_valid and bright_proxy and (typing_activity_ratio >= 0.20 or mouse_active_ratio >= 0.20) and fatigue_signal < 0.30 and self.dark_mode_active:
+            # DISABLE_DARK_MODE: bright ambient illumination (> 0.58) and currently dark appearance
+            elif cam_valid and bright_proxy and self.dark_mode_active and fatigue_signal < 0.30:
                 action = 'DISABLE_DARK_MODE'
-                reason = f'Bright ambient illumination proxy ({ambient:.2f} > 0.65); macOS Light appearance restored.'
+                reason = f'Bright ambient illumination proxy ({ambient:.2f}); macOS Light appearance restored.'
                 self.dark_mode_active = False
                 contributing_factors.append('Bright ambient illumination')
 
-            # Step E: RECOVERY / RESTORATION (Part 9, Actions 2, 4, 8)
-            elif self.audio_muted and (relaxed_signal >= 0.60 or workload < 0.30 or frustration_signal < 0.25):
-                action = 'UNMUTE_AUDIO'
-                reason = 'Cognitive workload eased and frustration subsided; system audio restored to original user volume.'
-                self.audio_muted = False
-                contributing_factors.append('Frustration recovery')
+            # Step D: HIGH WORKLOAD / DEEP FOCUS -> ENABLE_FOCUS_MODE
+            # Triggers reliably during productive tasks when workload >= 0.46 or focus_signal >= 0.55 or workload_z >= 1.0
+            elif (
+                (
+                    workload >= 0.46
+                    or (workload >= 0.40 and (focus_signal >= 0.55 or score >= 0.65))
+                    or workload_z >= 1.0
+                )
+                and context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']
+                and not self.in_focus_mode
+            ):
+                action = 'ENABLE_FOCUS_MODE'
+                if workload_z >= 1.0 and not is_calibrating:
+                    reason = f'Workload was elevated relative to baseline (z={workload_z:+.1f}) while {context.lower()}; Focus Mode engaged.'
+                    personal_note = f"Personal workload deviation: {workload_dev:+.2f}"
+                    contributing_factors.append('Personal baseline deviation exceeded')
+                else:
+                    reason = f'Productive engagement ({int(workload * 100)}% workload, AS: {score:.2f}) in {context.lower()}; desktop notifications silenced & Focus Mode engaged.'
+                    contributing_factors.append('Active productive focus')
+                self.in_focus_mode = True
 
-            elif self.in_focus_mode and (relaxed_signal >= 0.60 or workload < 0.30) and typing_rate < 0.30:
+            # Step E: RECOVERY / RESTORATION
+            elif self.in_focus_mode and (relaxed_signal >= 0.30 or workload < 0.25 or context in ['BROWSING', 'GENERAL_WORK', 'IDLE']):
                 action = 'DISABLE_FOCUS_MODE'
-                reason = 'Workload eased and user entered relaxed recovery; native Focus Mode disengaged.'
+                reason = 'Workload eased and user transitioned to browsing/recovery; native Focus Mode disengaged.'
                 self.in_focus_mode = False
                 contributing_factors.append('Focus recovery')
 
-            elif curr_brightness < 0.50 and (relaxed_signal >= 0.60 or bright_proxy) and fatigue_signal < 0.25:
+            elif self.audio_muted and (relaxed_signal >= 0.30 or workload < 0.25 or frustration_signal < 0.20):
+                action = 'UNMUTE_AUDIO'
+                reason = 'Cognitive workload eased and frustration subsided; system audio unmuted.'
+                self.audio_muted = False
+                contributing_factors.append('Frustration recovery')
+
+            elif curr_brightness < 0.55 and (relaxed_signal >= 0.35 or context in ['BROWSING', 'GENERAL_WORK']) and fatigue_signal < 0.25:
                 action = 'RESTORE_BRIGHTNESS'
-                reason = 'Visual strain cleared and ambient environment bright; original display brightness restored.'
+                reason = 'Comfortable viewing conditions restored; standard display brightness reinstated.'
                 contributing_factors.append('Brightness recovery')
 
         # ---------------------------------------------------------------------

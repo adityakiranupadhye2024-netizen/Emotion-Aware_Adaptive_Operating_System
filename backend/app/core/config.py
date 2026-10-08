@@ -4,17 +4,18 @@ from typing import Dict, Any
 
 # Centralized lowered demonstration thresholds for easy triggering
 DEFAULT_THRESHOLDS: Dict[str, float] = {
-    "workload_high": 0.40,
-    "workload_medium": 0.20,
-    "frustration_high": 0.25,
-    "fatigue_high": 0.25,
-    "mouse_jitter_high": 0.15,
-    "typing_error_high": 0.08,
+    "workload_high": 0.45,
+    "workload_medium": 0.25,
+    "frustration_high": 0.30,
+    "fatigue_high": 0.35,
+    "mouse_jitter_high": 0.10,
+    "typing_error_high": 0.06,
     "emotion_confidence_min": 0.20,
-    "decision_score_min": 0.30,
-    "cooldown_seconds": 10.0,
-    "ambient_dim_threshold": 0.25,
-    "ambient_bright_threshold": 0.65,
+    "decision_score_min": 0.25,
+    "cooldown_seconds": 5.0,
+    "ambient_dim_threshold": 0.40,
+    "ambient_bright_threshold": 0.60,
+    "focus_mode_workload_min": 0.46,
 }
 
 DEFAULT_AS_WEIGHTS: Dict[str, float] = {
