@@ -49,6 +49,7 @@ class NotificationService:
         **kwargs
     ) -> dict:
         now_ts = time.time()
+        now_iso = datetime.now(timezone.utc).isoformat()
         if action == "MUTE_AUDIO":
             action_clean = "System Volume Reduced To 30%"
         else:
