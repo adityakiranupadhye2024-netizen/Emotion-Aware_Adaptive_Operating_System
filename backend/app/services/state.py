@@ -312,6 +312,8 @@ class StateBuilder:
             click_rate = float(ms.get('click_rate', 0.0))
             idle_sec = float(ms.get('idle_duration_seconds', 0.0)) if hasattr(mouse, 'get_window_metrics') else (15.0 if ms.get('idle') else 0.0)
             context_name = str(ctx.get('activity', 'General')).upper()
+            if context_name == 'GENERAL':
+                context_name = 'GENERAL_WORK'
             context_conf = float(ctx.get('confidence', 0.80))
             switch_rate = float(ctx.get('app_switch_rate', 0.0))
             session_min = float(ctx.get('session_duration', 0)) / 60.0
@@ -395,6 +397,8 @@ class StateBuilder:
 
         dominant_app = ctx.get('dominant_app', 'General')
         dominant_activity = str(ctx.get('dominant_activity', 'General')).upper()
+        if dominant_activity == 'GENERAL':
+            dominant_activity = 'GENERAL_WORK'
         context_conf = float(ctx.get('context_confidence', 0.85))
         actual_app_switches = int(ctx.get('actual_app_switches', ctx.get('app_switches', 0)))
         obs_duration_min = max(0.5, float(window_summary.get('duration_seconds', 60.0)) / 60.0)

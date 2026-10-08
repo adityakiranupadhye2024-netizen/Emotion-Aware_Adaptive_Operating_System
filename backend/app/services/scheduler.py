@@ -169,8 +169,8 @@ class InputObservationWindow:
             'low_eye_visibility': (eye_vis_ratio < 0.45 and face_presence_ratio >= 0.60),
             'persistent_low_eye_visibility': (eye_vis_ratio < 0.40 and face_presence_ratio >= 0.60),
             'smile_observed': smile_ratio >= 0.40,
-            'dim_proxy': avg_ambient < float(settings.thresholds.get('ambient_dim_threshold', 0.48)),
-            'bright_proxy': avg_ambient > float(settings.thresholds.get('ambient_bright_threshold', 0.58))
+            'dim_proxy': avg_ambient < float(settings.thresholds.get('ambient_dim_threshold', 0.46)),
+            'bright_proxy': avg_ambient >= float(settings.thresholds.get('ambient_bright_threshold', 0.50))
         }
 
         return {

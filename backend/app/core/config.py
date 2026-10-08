@@ -2,19 +2,19 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
-# Centralized lowered demonstration thresholds for easy triggering
+# Centralized lowered demonstration thresholds for fast and easy demo triggering
 DEFAULT_THRESHOLDS: Dict[str, float] = {
-    "workload_high": 0.45,
-    "workload_medium": 0.25,
+    "workload_high": 0.35,
+    "workload_medium": 0.20,
     "frustration_high": 0.30,
     "fatigue_high": 0.35,
     "mouse_jitter_high": 0.10,
     "typing_error_high": 0.06,
     "emotion_confidence_min": 0.20,
-    "decision_score_min": 0.25,
+    "decision_score_min": 0.20,
     "cooldown_seconds": 5.0,
-    "ambient_dim_threshold": 0.48,
-    "ambient_bright_threshold": 0.58,
+    "ambient_dim_threshold": 0.46,
+    "ambient_bright_threshold": 0.50,
     "focus_mode_workload_min": 0.46,
 }
 

@@ -18,6 +18,7 @@ except Exception as e:
     DeepFace = None
 
 logger = logging.getLogger("eaos.camera")
+from app.core.config import settings
 
 FACIAL_EMOTIONS = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
 
@@ -633,7 +634,7 @@ class CameraSensor:
             try:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 raw_ambient = float(np.mean(gray) / 255.0)
-                self.ambient_light = round(0.75 * self.ambient_light + 0.25 * raw_ambient, 3)
+                self.ambient_light = round(0.50 * self.ambient_light + 0.50 * raw_ambient, 3)
 
                 enhanced_gray = self._clahe.apply(gray) if self._clahe is not None else gray
                 faces = ()
@@ -743,11 +744,13 @@ class CameraSensor:
             try:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 raw_ambient = float(np.mean(gray) / 255.0)
-                self.ambient_light = round(0.75 * self.ambient_light + 0.25 * raw_ambient, 3)
+                self.ambient_light = round(0.50 * self.ambient_light + 0.50 * raw_ambient, 3)
 
-                if self.ambient_light < 0.25:
+                dim_t = float(settings.thresholds.get('ambient_dim_threshold', 0.46))
+                bright_t = float(settings.thresholds.get('ambient_bright_threshold', 0.50))
+                if self.ambient_light < dim_t:
                     self.lighting_condition = "DIM"
-                elif self.ambient_light > 0.65:
+                elif self.ambient_light >= bright_t:
                     self.lighting_condition = "BRIGHT"
                 else:
                     self.lighting_condition = "NORMAL"
@@ -981,8 +984,8 @@ class CameraSensor:
                 'low_eye_visibility': low_eye_visibility,
                 'persistent_low_eye_visibility': persistent_low_eyes,
                 'smile_observed': smile_presence_ratio >= 0.40,
-                'dim_proxy': avg_light < 0.25,
-                'bright_proxy': avg_light > 0.65
+                'dim_proxy': avg_light < float(settings.thresholds.get('ambient_dim_threshold', 0.46)),
+                'bright_proxy': avg_light >= float(settings.thresholds.get('ambient_bright_threshold', 0.50))
             }
 
             return {

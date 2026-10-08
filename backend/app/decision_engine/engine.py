@@ -449,6 +449,8 @@ class DecisionEngine:
 
         ctx_info = state.get('context', {})
         context = str(ctx_info.get('context', ctx_info.get('activity', 'GENERAL_WORK'))).upper()
+        if context == 'GENERAL':
+            context = 'GENERAL_WORK'
         ctx_conf = float(ctx_info.get('confidence', ctx_info.get('context_confidence', 0.85)))
 
         if context in ['CODING', 'WRITING', 'STUDYING']:
@@ -494,6 +496,8 @@ class DecisionEngine:
 
         ctx_info = state.get('context', {})
         context = str(ctx_info.get('context', ctx_info.get('activity', 'GENERAL_WORK'))).upper()
+        if context == 'GENERAL':
+            context = 'GENERAL_WORK'
         context_conf = float(ctx_info.get('context_confidence', ctx_info.get('confidence', 0.80)))
 
         inputs = state.get('inputs', {})
@@ -514,10 +518,10 @@ class DecisionEngine:
 
         cam_conditions = cam.get('conditions', {})
         ambient = float(cam.get('average_visual_light_proxy', cam.get('ambient_light', 0.50)))
-        dim_thresh = float(settings.thresholds.get('ambient_dim_threshold', 0.40))
-        bright_thresh = float(settings.thresholds.get('ambient_bright_threshold', 0.60))
+        dim_thresh = float(settings.thresholds.get('ambient_dim_threshold', 0.46))
+        bright_thresh = float(settings.thresholds.get('ambient_bright_threshold', 0.50))
         dim_proxy = bool(cam_conditions.get('dim_proxy') or ambient < dim_thresh)
-        bright_proxy = bool(cam_conditions.get('bright_proxy') or ambient > bright_thresh)
+        bright_proxy = bool(cam_conditions.get('bright_proxy') or ambient >= bright_thresh)
         cam_valid = bool(cam_conditions.get('valid_camera_observation', cam.get('confidence', 0.0) >= 0.5))
 
         # Synchronize with ground truth OS state
@@ -654,32 +658,33 @@ class DecisionEngine:
                 contributing_factors.append(f'Current brightness {int(curr_brightness * 100)}%')
 
             # Step C: VISUAL ENVIRONMENT LIGHTING (Dark / Light Mode)
-            elif (dim_proxy or (ambient < dim_thresh and ambient > 0.05)) and not self.dark_mode_active and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.05):
+            # Low-light / dim ambient environment (< 0.46) -> ENABLE_DARK_MODE
+            elif (dim_proxy or ambient < dim_thresh) and not self.dark_mode_active and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.0 or bool(cam)):
                 action = 'ENABLE_DARK_MODE'
                 reason = f'Ambient illumination proxy ({ambient:.2f}) indicates low-light environment; macOS Dark Mode engaged for visual comfort.'
                 self.dark_mode_active = True
                 contributing_factors.append('Ambient light & visual comfort')
 
-            # DISABLE_DARK_MODE: bright ambient illumination (> 0.58) and currently dark appearance
-            elif (bright_proxy or ambient > bright_thresh) and self.dark_mode_active and fatigue_signal < 0.30 and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.05):
+            # DISABLE_DARK_MODE: bright ambient illumination (>= 0.50) and currently dark appearance
+            elif (bright_proxy or ambient >= bright_thresh) and self.dark_mode_active and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.0 or bool(cam)):
                 action = 'DISABLE_DARK_MODE'
                 reason = f'Bright ambient illumination proxy ({ambient:.2f}); macOS Light appearance restored.'
                 self.dark_mode_active = False
                 contributing_factors.append('Bright ambient illumination')
 
             # Step D: HIGH WORKLOAD / DEEP FOCUS -> ENABLE_FOCUS_MODE
-            # Triggers reliably during productive tasks when workload >= 0.46 or focus_signal >= 0.55 or workload_z >= 1.0
+            # Triggers reliably during active tasks when workload >= focus_mode_workload_min or deep focus
             elif (
                 (
-                    workload >= 0.46
-                    or (workload >= 0.40 and (focus_signal >= 0.55 or score >= 0.65))
+                    workload >= float(settings.thresholds.get('focus_mode_workload_min', 0.46))
+                    or (workload >= 0.38 and (focus_signal >= 0.50 or score >= 0.60))
                     or workload_z >= 1.0
                 )
-                and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] or (context == 'BROWSING' and (workload >= 0.46 or typing_rate >= 1.5)))
+                and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK', 'BROWSING'])
                 and not self.in_focus_mode
             ):
                 action = 'ENABLE_FOCUS_MODE'
-                if workload_z >= 1.0 and not is_calibrating:
+                if workload_z >= 0.5 and not is_calibrating:
                     reason = f'Workload was elevated relative to baseline (z={workload_z:+.1f}) while {context.lower()}; Focus Mode engaged.'
                     personal_note = f"Personal workload deviation: {workload_dev:+.2f}"
                     contributing_factors.append('Personal baseline deviation exceeded')
@@ -689,9 +694,14 @@ class DecisionEngine:
                 self.in_focus_mode = True
 
             # Step E: RECOVERY / RESTORATION
-            elif self.in_focus_mode and (relaxed_signal >= 0.30 or workload < 0.25 or context in ['BROWSING', 'GENERAL_WORK', 'IDLE']):
+            elif self.in_focus_mode and (
+                relaxed_signal >= 0.25
+                or workload < 0.20
+                or context in ['IDLE']
+                or (typing_activity_ratio < 0.10 and mouse_active_ratio < 0.10 and ms.get('idle', False))
+            ):
                 action = 'DISABLE_FOCUS_MODE'
-                reason = 'Workload eased and user transitioned to browsing/recovery; native Focus Mode disengaged.'
+                reason = 'Workload eased and user transitioned to recovery/idle; native Focus Mode disengaged.'
                 self.in_focus_mode = False
                 contributing_factors.append('Focus recovery')
 
@@ -732,17 +742,16 @@ class DecisionEngine:
             # Active work contexts: strictly safe legal actions
             # Focus Mode candidates: only when actively working
             if not self.in_focus_mode:
-                if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] and not (typing_activity_ratio < 0.15 and mouse_active_ratio < 0.15):
+                if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK', 'BROWSING'] and not (typing_activity_ratio < 0.10 and mouse_active_ratio < 0.10):
                     candidate_actions.append('ENABLE_FOCUS_MODE')
             else:
                 candidate_actions.append('DISABLE_FOCUS_MODE')
 
-            # Dark Mode candidates: only when camera data is valid
-            if cam_valid:
-                if not self.dark_mode_active:
-                    candidate_actions.append('ENABLE_DARK_MODE')
-                else:
-                    candidate_actions.append('DISABLE_DARK_MODE')
+            # Dark Mode candidates:
+            if not self.dark_mode_active:
+                candidate_actions.append('ENABLE_DARK_MODE')
+            else:
+                candidate_actions.append('DISABLE_DARK_MODE')
 
             # Audio candidates: only if frustration is elevated
             if not self.audio_muted:
