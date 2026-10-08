@@ -13,8 +13,8 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
     "emotion_confidence_min": 0.20,
     "decision_score_min": 0.25,
     "cooldown_seconds": 5.0,
-    "ambient_dim_threshold": 0.40,
-    "ambient_bright_threshold": 0.60,
+    "ambient_dim_threshold": 0.48,
+    "ambient_bright_threshold": 0.58,
     "focus_mode_workload_min": 0.46,
 }
 

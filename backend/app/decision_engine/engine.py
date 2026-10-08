@@ -654,14 +654,14 @@ class DecisionEngine:
                 contributing_factors.append(f'Current brightness {int(curr_brightness * 100)}%')
 
             # Step C: VISUAL ENVIRONMENT LIGHTING (Dark / Light Mode)
-            elif cam_valid and dim_proxy and not self.dark_mode_active:
+            elif (dim_proxy or (ambient < dim_thresh and ambient > 0.05)) and not self.dark_mode_active and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.05):
                 action = 'ENABLE_DARK_MODE'
                 reason = f'Ambient illumination proxy ({ambient:.2f}) indicates low-light environment; macOS Dark Mode engaged for visual comfort.'
                 self.dark_mode_active = True
                 contributing_factors.append('Ambient light & visual comfort')
 
             # DISABLE_DARK_MODE: bright ambient illumination (> 0.58) and currently dark appearance
-            elif cam_valid and bright_proxy and self.dark_mode_active and fatigue_signal < 0.30:
+            elif (bright_proxy or ambient > bright_thresh) and self.dark_mode_active and fatigue_signal < 0.30 and (cam_valid or cam.get('active', False) or cam.get('camera_active_ratio', 0) > 0.05):
                 action = 'DISABLE_DARK_MODE'
                 reason = f'Bright ambient illumination proxy ({ambient:.2f}); macOS Light appearance restored.'
                 self.dark_mode_active = False
@@ -675,7 +675,7 @@ class DecisionEngine:
                     or (workload >= 0.40 and (focus_signal >= 0.55 or score >= 0.65))
                     or workload_z >= 1.0
                 )
-                and context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']
+                and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] or (context == 'BROWSING' and (workload >= 0.46 or typing_rate >= 1.5)))
                 and not self.in_focus_mode
             ):
                 action = 'ENABLE_FOCUS_MODE'
