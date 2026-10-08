@@ -398,6 +398,11 @@ class MacActuator:
             target_b = round(target_b, 2)
 
             cmd_ok = run_shortcut('Set Brightness', f"{target_b:.2f}")
+            used_cmd = f"Shortcut: Set Brightness ('{target_b:.2f}')"
+            if not cmd_ok:
+                if run_shortcut('Set Brightness 1'):
+                    cmd_ok = True
+                    used_cmd = "Shortcut: Set Brightness 1 (70%)"
             time.sleep(0.20)
             state_after = self.get_current_os_state(force_refresh=True)
 
@@ -406,16 +411,22 @@ class MacActuator:
             success = verified and cmd_ok
             if verified:
                 record_os_state_event('BRIGHTNESS', f'{int(target_b * 100)}%', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, f"Shortcut: Set Brightness ('{target_b:.2f}')", state_before, state_after, verified, success,
+            return self._build_result(action, used_cmd, state_before, state_after, verified, success,
                                       f'Display brightness reduced to {int(target_b * 100)}% (original {int(self.eaos_original_brightness * 100)}% saved).', start_t, now_iso)
 
         # 9. RESTORE_BRIGHTNESS (Part 9, Action 8 & Part 15)
         elif action == 'RESTORE_BRIGHTNESS':
-            # Restore exact preserved original brightness (never fixed 0.65)
-            restore_b = self.eaos_original_brightness if self.eaos_original_brightness is not None else 0.65
+            # Restore exact preserved original brightness (defaults to 0.70)
+            restore_b = self.eaos_original_brightness if self.eaos_original_brightness is not None else 0.70
             restore_b = round(restore_b, 2)
 
             cmd_ok = run_shortcut('Set Brightness', f"{restore_b:.2f}")
+            used_cmd = f"Shortcut: Set Brightness ('{restore_b:.2f}')"
+            if not cmd_ok or abs(restore_b - 0.70) <= 0.05:
+                # Also leverage user's dedicated 'Set Brightness 1' macOS shortcut (70%)
+                if run_shortcut('Set Brightness 1'):
+                    cmd_ok = True
+                    used_cmd = "Shortcut: Set Brightness 1 (70%)"
             time.sleep(0.20)
             state_after = self.get_current_os_state(force_refresh=True)
 
@@ -426,14 +437,21 @@ class MacActuator:
                 self.eaos_owned_brightness = False
                 self.eaos_original_brightness = None
                 record_os_state_event('BRIGHTNESS', f'{int(restore_b * 100)}%', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, f"Shortcut: Set Brightness ('{restore_b:.2f}')", state_before, state_after, verified, success,
+            return self._build_result(action, used_cmd, state_before, state_after, verified, success,
                                       f'Display brightness restored to original {int(restore_b * 100)}%.', start_t, now_iso)
 
-        # 10. SET_BRIGHTNESS
-        elif action == 'SET_BRIGHTNESS':
-            target_b = float(params.get('brightness', params.get('value', 0.5)))
+        # 10. SET_BRIGHTNESS / SET_BRIGHTNESS_1
+        elif action in ['SET_BRIGHTNESS', 'SET_BRIGHTNESS_1', 'SET_BRIGHTNESS_70']:
+            target_b = float(params.get('brightness', params.get('value', 0.7 if action != 'SET_BRIGHTNESS' else 0.5)))
             target_b = max(0.05, min(1.0, round(target_b, 2)))
+            
             cmd_ok = run_shortcut('Set Brightness', f"{target_b:.2f}")
+            used_cmd = f"Shortcut: Set Brightness ('{target_b:.2f}')"
+            if not cmd_ok or abs(target_b - 0.70) <= 0.05 or action in ['SET_BRIGHTNESS_1', 'SET_BRIGHTNESS_70']:
+                # Support user's dedicated 'Set Brightness 1' shortcut (70%)
+                if run_shortcut('Set Brightness 1'):
+                    cmd_ok = True
+                    used_cmd = "Shortcut: Set Brightness 1 (70%)"
             time.sleep(0.20)
             state_after = self.get_current_os_state(force_refresh=True)
 
@@ -442,7 +460,7 @@ class MacActuator:
             success = verified and cmd_ok
             if verified:
                 record_os_state_event('BRIGHTNESS', f'{int(target_b * 100)}%', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, f"Shortcut: Set Brightness ('{target_b:.2f}')", state_before, state_after, verified, success,
+            return self._build_result(action, used_cmd, state_before, state_after, verified, success,
                                       f'Display brightness set to {int(target_b * 100)}%.', start_t, now_iso)
 
         # 11. SET_VOLUME
@@ -534,9 +552,11 @@ class MacActuator:
         restore_vol = self.eaos_original_volume if self.eaos_original_volume is not None else 50
         run_shortcut('Set Volume', str(restore_vol))
 
-        # Restore original brightness if preserved, else 0.65
-        restore_b = self.eaos_original_brightness if self.eaos_original_brightness is not None else 0.65
-        run_shortcut('Set Brightness', f"{restore_b:.2f}")
+        # Restore original brightness if preserved, else 0.70
+        restore_b = self.eaos_original_brightness if self.eaos_original_brightness is not None else 0.70
+        cmd_b_ok = run_shortcut('Set Brightness', f"{restore_b:.2f}")
+        if not cmd_b_ok or abs(restore_b - 0.70) <= 0.05:
+            run_shortcut('Set Brightness 1')
 
         self.focus_active = False
         self.eaos_original_volume = None
