@@ -336,7 +336,7 @@ export default function Overview({ s, online }: { s: LiveState | null; online: b
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div>
             <span>⚡ LATEST ASSESSMENT RESULT</span>
-            <h2>{latestDecision.action?.replace(/_/g, ' ')}</h2>
+            <h2>{latestDecision.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : latestDecision.action?.replace(/_/g, ' ')}</h2>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button

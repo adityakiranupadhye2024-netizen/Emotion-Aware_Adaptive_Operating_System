@@ -62,7 +62,7 @@ export const DecisionDetailsModal: React.FC<DecisionDetailsModalProps> = ({
           <div className="stat-card" style={{ padding: '10px', background: 'rgba(255,255,255,0.03)' }}>
             <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>ADAPTATION ACTION</div>
             <div style={{ fontWeight: 600, color: '#38bdf8', marginTop: '4px' }}>
-              {decision.action.replace(/_/g, ' ')}
+              {decision.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : decision.action.replace(/_/g, ' ')}
             </div>
           </div>
           <div className="stat-card" style={{ padding: '10px', background: 'rgba(255,255,255,0.03)' }}>

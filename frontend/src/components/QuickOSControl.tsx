@@ -60,7 +60,7 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
     try {
       const res = await executeOSAction(action, reason, value);
       setIsSuccess(res?.execution?.verified ?? true);
-      setLastMessage(res?.execution?.message || `${action.replace(/_/g, ' ')} executed and verified on macOS.`);
+      setLastMessage(res?.execution?.message || `${(action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : action.replace(/_/g, ' '))} executed and verified on macOS.`);
       if (onActionTriggered) {
         onActionTriggered(res);
       }
@@ -102,7 +102,7 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: '1rem' }}>{isInputPhase ? '📥' : '⚡'}</span>
             <span style={{ color: isInputPhase ? '#38bdf8' : '#34d399', fontWeight: 700 }}>
-              {isInputPhase ? `Input Collection Phase Active (${timerStr})` : `Adaptation Active: ${(decision?.action || 'NO_ACTION').replace(/_/g, ' ')} (${timerStr})`}
+              {isInputPhase ? `Input Collection Phase Active (${timerStr})` : `Adaptation Active: ${(decision?.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : (decision?.action || 'NO_ACTION').replace(/_/g, ' '))} (${timerStr})`}
             </span>
           </div>
           <span style={{ color: '#cbd5e1', fontSize: '0.74rem' }}>

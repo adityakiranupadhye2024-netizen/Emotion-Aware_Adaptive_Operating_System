@@ -51,7 +51,7 @@ class NotificationService:
         now_ts = time.time()
         now_iso = datetime.now(timezone.utc).isoformat()
         if action == "MUTE_AUDIO":
-            action_clean = "System Volume Reduced To 30%"
+            action_clean = "Audio Decreased"
         else:
             action_clean = action.replace("_", " ").title()
 
@@ -95,11 +95,17 @@ class NotificationService:
             )
         elif action == "MUTE_AUDIO":
             title = "EAOS Adaptation"
-            subtitle = f"System volume reduced to 30% · AS: {adaptive_score:.2f}"
-            clean_reason = reason.replace("Audio muted", "System volume reduced to 30%").replace("audio muted", "system volume reduced to 30%")
+            subtitle = f"Audio Decreased · AS: {adaptive_score:.2f}"
+            clean_reason = (
+                reason
+                .replace("System volume reduced to 30%", "Audio decreased")
+                .replace("system volume reduced to 30%", "audio decreased")
+                .replace("Audio muted", "Audio decreased")
+                .replace("audio muted", "audio decreased")
+            )
             message = (
                 f"Context: {context}\n"
-                f"Action: System volume reduced to 30%\n"
+                f"Action: Audio Decreased\n"
                 f"Reason: {clean_reason}\n"
                 f"Next assessment in {cycle_time_str}"
             )

@@ -214,7 +214,7 @@ export default function Analytics({ s }: { s: LiveState | null }) {
       time: formatTime(d.timestamp),
       as: score,
       adaptationPoint: isAdaptation ? score : null,
-      action: d.action?.replace(/_/g, ' ') || 'NO ACTION',
+      action: d.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : (d.action?.replace(/_/g, ' ') || 'NO ACTION'),
       isAdaptation
     };
   });
@@ -928,7 +928,7 @@ export default function Analytics({ s }: { s: LiveState | null }) {
                     <div className="flow-step" style={{ minWidth: 160 }}>
                       <span>OS Action Executed</span>
                       <strong style={{ color: isAction ? '#38bdf8' : 'var(--text-muted)' }}>
-                        {d.action?.replace(/_/g, ' ') || 'NO ACTION'}
+                        {d.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : (d.action?.replace(/_/g, ' ') || 'NO ACTION')}
                       </strong>
                     </div>
 
@@ -1063,7 +1063,7 @@ export default function Analytics({ s }: { s: LiveState | null }) {
                       <td style={{ padding: '12px 14px', fontWeight: 600, color: '#a78bfa' }}>{asScore}</td>
                       <td style={{ padding: '12px 14px' }}>
                         <span className={`status-pill ${isAct ? 'ok' : 'subtle'}`}>
-                          {d.action?.replace(/_/g, ' ') || 'NO ACTION'}
+                          {d.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : (d.action?.replace(/_/g, ' ') || 'NO ACTION')}
                         </span>
                       </td>
                       <td style={{ padding: '12px 14px', color: 'var(--text-muted)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

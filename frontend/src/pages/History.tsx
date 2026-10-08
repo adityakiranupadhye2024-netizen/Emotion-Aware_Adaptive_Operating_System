@@ -91,7 +91,7 @@ export default function History() {
               <option value="ALL">All Actions</option>
               {uniqueActions.map((a) => (
                 <option key={a} value={a}>
-                  {a.replace(/_/g, ' ')}
+                  {a === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : a.replace(/_/g, ' ')}
                 </option>
               ))}
             </select>
@@ -208,7 +208,7 @@ export default function History() {
                   </td>
                   <td style={{ padding: '10px 8px' }}>
                     <b style={{ color: r.action === 'NO_ACTION' ? '#64748b' : '#38bdf8' }}>
-                      {r.action.replace(/_/g, ' ')}
+                      {r.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : r.action.replace(/_/g, ' ')}
                     </b>
                   </td>
                   <td style={{ padding: '10px 8px' }}>

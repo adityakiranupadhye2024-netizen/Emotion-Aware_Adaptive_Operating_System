@@ -30,7 +30,7 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({ latestDeci
     const ts = latestDecision.timestamp || '';
     if (ts && ts !== lastTs) {
       setLastTs(ts);
-      const actionClean = latestDecision.action.replace(/_/g, ' ').toUpperCase();
+      const actionClean = latestDecision.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : latestDecision.action.replace(/_/g, ' ').toUpperCase();
       const newToast: ToastItem = {
         id: `${ts}-${Math.random()}`,
         title: `EAOS Adaptation: ${actionClean}`,

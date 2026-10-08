@@ -638,7 +638,7 @@ class DecisionEngine:
                 action = 'MUTE_AUDIO'
                 reason = (
                     f"Typing correction ({int(backspace_rate * 100)}%) and emotional friction "
-                    f"during {context.lower()} session indicated frustration. System volume reduced to 30% to restore focus."
+                    f"during {context.lower()} session indicated frustration. Audio decreased to restore focus."
                 )
                 self.audio_muted = True
                 contributing_factors.append(f"Typing correction {int(backspace_rate * 100)}%")

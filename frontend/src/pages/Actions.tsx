@@ -94,7 +94,7 @@ export default function Actions({ s }: { s: LiveState | null }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div>
             <span>⚡ CURRENT AUTOMATIC ADAPTATION (CYCLE #{s.cycle?.cycle_id || 1})</span>
-            <h2>{decision.action.replace(/_/g, ' ')}</h2>
+            <h2>{decision.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : decision.action.replace(/_/g, ' ')}</h2>
           </div>
           <button
             onClick={() => {
@@ -246,7 +246,7 @@ export default function Actions({ s }: { s: LiveState | null }) {
                   <td style={{ color: '#94a3b8' }}>{new Date(r.timestamp).toLocaleTimeString()}</td>
                   <td>
                     <b style={{ color: r.action === 'NO_ACTION' ? '#64748b' : '#38bdf8' }}>
-                      {r.action.replace(/_/g, ' ')}
+                      {r.action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : r.action.replace(/_/g, ' ')}
                     </b>
                   </td>
                   <td style={{ color: '#cbd5e1' }}>{r.context}</td>
