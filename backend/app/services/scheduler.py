@@ -21,7 +21,7 @@ class InputObservationWindow:
         self.duration_seconds = duration_seconds
         self.end_time = start_time + duration_seconds
 
-        # Real telemetry samples collected during the 5-minute input window
+        # Real telemetry samples collected during the input window
         self.keyboard_samples: List[Dict[str, Any]] = []
         self.mouse_samples: List[Dict[str, Any]] = []
         self.context_samples: List[Dict[str, Any]] = []
@@ -29,76 +29,135 @@ class InputObservationWindow:
         self.workload_samples: List[float] = []
         self.app_frequencies: Dict[str, int] = {}
         self.activity_frequencies: Dict[str, int] = {}
+        self.last_sampled_app: Optional[str] = None
+        self.actual_app_switches: int = 0
 
     def add_sample(self, kb: dict, ms: dict, ctx: dict, cam: dict, workload: float):
         if kb:
             self.keyboard_samples.append({
-                'typing_rate': kb.get('typing_rate', 0.0),
-                'backspace_rate': kb.get('backspace_rate', 0.0),
-                'avg_inter_key_interval': kb.get('avg_inter_key_interval', 0.0)
+                'typing_rate': float(kb.get('typing_rate', 0.0)),
+                'backspace_rate': float(kb.get('backspace_rate', 0.0)),
+                'avg_inter_key_interval': float(kb.get('avg_inter_key_interval', 0.0)),
+                'typing_rhythm_cv': float(kb.get('typing_rhythm_cv', 0.0)),
+                'typing_activity_ratio': float(kb.get('typing_activity_ratio', 0.5 if kb.get('typing_rate', 0) > 0 else 0.0))
             })
         if ms:
             self.mouse_samples.append({
-                'movement_distance': ms.get('movement_distance', 0.0),
-                'jitter': ms.get('jitter', 0.0),
-                'idle': ms.get('idle', False)
+                'movement_distance': float(ms.get('movement_distance', 0.0)),
+                'jitter': float(ms.get('jitter', 0.0)),
+                'click_rate': float(ms.get('click_rate', 0.0)),
+                'mouse_active_ratio': float(ms.get('active_mouse_ratio', 0.5 if not ms.get('idle') else 0.0)),
+                'idle': bool(ms.get('idle', False)),
+                'idle_duration_seconds': float(ms.get('idle_duration_seconds', 0.0))
             })
         if ctx:
-            app = ctx.get('active_app', 'Unknown')
-            act = ctx.get('activity', 'General')
+            app = str(ctx.get('active_app', 'Unknown'))
+            act = str(ctx.get('activity', 'General'))
+            if self.last_sampled_app is not None and app != self.last_sampled_app:
+                self.actual_app_switches += 1
+            self.last_sampled_app = app
             self.app_frequencies[app] = self.app_frequencies.get(app, 0) + 1
             self.activity_frequencies[act] = self.activity_frequencies.get(act, 0) + 1
             self.context_samples.append(ctx)
         if cam and cam.get('active', False):
             self.camera_samples.append({
-                'face_detected': cam.get('face_detected', False),
-                'confidence': cam.get('confidence', 0.0),
-                'ambient_light': cam.get('ambient_light', 0.5)
+                'face_detected': bool(cam.get('face_detected', False)),
+                'eyes_detected': bool(cam.get('eyes_detected', False)),
+                'smile_detected': bool(cam.get('smile_detected', False)),
+                'confidence': float(cam.get('confidence', 0.0)),
+                'ambient_light': float(cam.get('ambient_light', 0.5)),
+                'fatigue_score': float(cam.get('fatigue_score', 0.0))
             })
-        self.workload_samples.append(workload)
+        self.workload_samples.append(float(workload))
 
     def get_aggregated_state(self) -> Dict[str, Any]:
-        avg_typing = sum(s['typing_rate'] for s in self.keyboard_samples) / max(1, len(self.keyboard_samples)) if self.keyboard_samples else 0.0
-        avg_backspace = sum(s['backspace_rate'] for s in self.keyboard_samples) / max(1, len(self.keyboard_samples)) if self.keyboard_samples else 0.0
-        avg_interval = sum(s['avg_inter_key_interval'] for s in self.keyboard_samples) / max(1, len(self.keyboard_samples)) if self.keyboard_samples else 0.0
+        n_kb = max(1, len(self.keyboard_samples))
+        avg_typing = sum(s['typing_rate'] for s in self.keyboard_samples) / n_kb if self.keyboard_samples else 0.0
+        avg_backspace = sum(s['backspace_rate'] for s in self.keyboard_samples) / n_kb if self.keyboard_samples else 0.0
+        avg_interval = sum(s['avg_inter_key_interval'] for s in self.keyboard_samples) / n_kb if self.keyboard_samples else 0.0
+        avg_cv = sum(s.get('typing_rhythm_cv', 0.0) for s in self.keyboard_samples) / n_kb if self.keyboard_samples else 0.0
+        avg_act = sum(s.get('typing_activity_ratio', 0.5 if avg_typing > 0 else 0.0) for s in self.keyboard_samples) / n_kb if self.keyboard_samples else 0.0
 
-        avg_jitter = sum(s['jitter'] for s in self.mouse_samples) / max(1, len(self.mouse_samples)) if self.mouse_samples else 0.0
+        n_ms = max(1, len(self.mouse_samples))
+        avg_jitter = sum(s['jitter'] for s in self.mouse_samples) / n_ms if self.mouse_samples else 0.0
+        avg_clicks = sum(s.get('click_rate', 0.0) for s in self.mouse_samples) / n_ms if self.mouse_samples else 0.0
         active_mouse_count = sum(1 for s in self.mouse_samples if not s['idle'])
-        mouse_active_ratio = active_mouse_count / max(1, len(self.mouse_samples)) if self.mouse_samples else 0.5
+        mouse_active_ratio = active_mouse_count / n_ms if self.mouse_samples else 0.5
+        last_idle_sec = self.mouse_samples[-1].get('idle_duration_seconds', 0.0) if self.mouse_samples else 0.0
 
         dominant_app = max(self.app_frequencies, key=self.app_frequencies.get) if self.app_frequencies else 'General'
         dominant_activity = max(self.activity_frequencies, key=self.activity_frequencies.get) if self.activity_frequencies else 'General'
+        avg_ctx_conf = sum(float(c.get('confidence', 0.80)) for c in self.context_samples) / max(1, len(self.context_samples)) if self.context_samples else 0.85
 
         avg_workload = sum(self.workload_samples) / max(1, len(self.workload_samples)) if self.workload_samples else 0.40
 
+        n_cam = max(1, len(self.camera_samples))
         face_detected_samples = sum(1 for s in self.camera_samples if s.get('face_detected'))
-        face_presence_ratio = face_detected_samples / max(1, len(self.camera_samples)) if self.camera_samples else 0.0
-        avg_ambient = sum(s.get('ambient_light', 0.5) for s in self.camera_samples) / max(1, len(self.camera_samples)) if self.camera_samples else 0.5
-        avg_face_conf = sum(s.get('confidence', 0.0) for s in self.camera_samples) / max(1, len(self.camera_samples)) if self.camera_samples else 0.0
+        face_presence_ratio = face_detected_samples / n_cam if self.camera_samples else 0.0
+        avg_ambient = sum(s.get('ambient_light', 0.5) for s in self.camera_samples) / n_cam if self.camera_samples else 0.5
+        avg_face_conf = sum(s.get('confidence', 0.0) for s in self.camera_samples) / n_cam if self.camera_samples else 0.0
+        avg_fatigue = sum(s.get('fatigue_score', 0.0) for s in self.camera_samples) / n_cam if self.camera_samples else 0.0
+
+        eye_detected_samples = sum(1 for s in self.camera_samples if s.get('eyes_detected'))
+        eye_vis_ratio = eye_detected_samples / float(max(1, face_detected_samples)) if face_detected_samples > 0 else 0.0
+
+        smile_detected_samples = sum(1 for s in self.camera_samples if s.get('smile_detected'))
+        smile_ratio = smile_detected_samples / float(max(1, face_detected_samples)) if face_detected_samples > 0 else 0.0
+
+        had_camera = len(self.camera_samples) > 0
+        cam_conditions = {
+            'valid_camera_observation': had_camera and len(self.camera_samples) >= 5,
+            'face_present': face_presence_ratio >= 0.60,
+            'strong_face_presence': face_presence_ratio >= 0.80,
+            'face_mostly_absent': face_presence_ratio < 0.30,
+            'eyes_engaged': (eye_vis_ratio >= 0.65 and face_presence_ratio >= 0.50),
+            'low_eye_visibility': (eye_vis_ratio < 0.45 and face_presence_ratio >= 0.60),
+            'persistent_low_eye_visibility': (eye_vis_ratio < 0.40 and face_presence_ratio >= 0.60),
+            'smile_observed': smile_ratio >= 0.40,
+            'dim_proxy': avg_ambient < 0.25,
+            'bright_proxy': avg_ambient > 0.65
+        }
 
         return {
             'cycle_id': self.cycle_id,
             'samples_count': len(self.workload_samples),
             'camera_samples_count': len(self.camera_samples),
+            'duration_seconds': self.duration_seconds,
             'keyboard': {
                 'avg_typing_rate': round(avg_typing, 2),
                 'avg_backspace_rate': round(avg_backspace, 3),
-                'avg_inter_key_interval': round(avg_interval, 3)
+                'avg_inter_key_interval': round(avg_interval, 3),
+                'typing_rhythm_cv': round(avg_cv, 3),
+                'typing_activity_ratio': round(avg_act, 3)
             },
             'mouse': {
                 'avg_jitter': round(avg_jitter, 3),
-                'mouse_active_ratio': round(mouse_active_ratio, 2)
+                'mouse_active_ratio': round(mouse_active_ratio, 2),
+                'click_rate': round(avg_clicks, 2),
+                'idle_duration_seconds': round(last_idle_sec, 1),
+                'conditions': {
+                    'mouse_idle': last_idle_sec >= 15.0 or mouse_active_ratio < 0.15,
+                    'strong_idle': last_idle_sec >= 25.0 or mouse_active_ratio < 0.10
+                }
             },
             'context': {
                 'dominant_app': dominant_app,
                 'dominant_activity': dominant_activity,
-                'app_switches': len(self.context_samples)
+                'actual_app_switches': self.actual_app_switches,
+                'app_switches': self.actual_app_switches,
+                'context_confidence': round(avg_ctx_conf, 2)
             },
             'camera': {
                 'face_presence_ratio': round(face_presence_ratio, 2),
+                'eye_visibility_ratio': round(eye_vis_ratio, 2),
+                'smile_presence_ratio': round(smile_ratio, 2),
                 'avg_ambient_light': round(avg_ambient, 3),
+                'average_visual_light_proxy': round(avg_ambient, 3),
                 'avg_confidence': round(avg_face_conf, 2),
-                'had_camera_window': len(self.camera_samples) > 0
+                'camera_data_confidence': round(avg_face_conf * (0.3 + 0.7 * face_presence_ratio), 2) if had_camera else 0.0,
+                'fatigue_proxy': round(avg_fatigue, 2),
+                'had_camera_window': had_camera,
+                'conditions': cam_conditions
             },
             'workload': round(avg_workload, 3)
         }
@@ -106,12 +165,12 @@ class InputObservationWindow:
 
 class CycleScheduler:
     """
-    Manages the strict repeating 10-minute cycle:
-    Phase 1: INPUT_COLLECTION (5 minutes) -> Wall-clock slots :00-:05, :10-:15, :20-:25, etc.
-    Phase 2: ADAPTATION (5 minutes)       -> Wall-clock slots :05-:10, :15-:20, :25-:30, etc.
+    Manages the strict repeating adaptive cycle (default: 2-minute total = 1-min input + 1-min adaptation):
+    Phase 1: INPUT_COLLECTION (configurable, default 1 minute)
+    Phase 2: ADAPTATION (configurable, default 1 minute)
 
     There is NEVER a period where both phases are active simultaneously.
-    Aligned to wall-clock time 5-minute boundaries (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55).
+    Aligned to wall-clock time boundaries determined by settings.get_effective_cycle_seconds().
     """
     def __init__(self, camera_sensor, state_builder, decision_engine, os_actuator):
         self.camera = camera_sensor
@@ -227,7 +286,7 @@ class CycleScheduler:
                         'action': 'NO_ACTION',
                         'reason': 'Started mid-adaptation window. Nominal settings maintained until next input window.',
                         'confidence': 0.85,
-                        'policy': 'Wall-Clock 10-Min Cycle',
+                        'policy': 'Adaptive 2-Min Cycle',
                         'adaptive_score': 0.50,
                         'status': 'executed',
                         'timestamp': datetime.now(timezone.utc).isoformat()
@@ -280,7 +339,7 @@ class CycleScheduler:
                 elif not settings.camera_sensing_enabled and self.camera and self.camera.is_active():
                     self.camera.close_camera()
 
-            # Check for wall-clock 5-minute boundary crossing
+            # Check for wall-clock boundary crossing
             if self.last_slot_idx is not None and current_slot != self.last_slot_idx:
                 slot_diff = current_slot - self.last_slot_idx
                 if slot_diff == 1:
@@ -306,7 +365,7 @@ class CycleScheduler:
 
     def _transition_to_adaptation(self):
         """
-        Exact transition: INPUT_COLLECTION -> ADAPTATION at the 5-minute boundary.
+        Exact transition: INPUT_COLLECTION -> ADAPTATION at the cycle boundary.
         1. Aggregates collected signals.
         2. Calculates state, workload, emotion, context.
         3. Applies personalization and calculates Adaptive Score (AS).
@@ -314,14 +373,14 @@ class CycleScheduler:
         5. Closes the camera for the adaptation phase.
         6. Executes OS adaptation once.
         7. Sends single intelligent notification.
-        8. Holds adaptation for the next 5 minutes.
+        8. Holds adaptation for the next cycle phase.
         """
         now_ts = time.time()
         now_iso = datetime.now(timezone.utc).isoformat()
         input_start_iso = datetime.fromtimestamp(self.cycle_start_time, tz=timezone.utc).isoformat()
         next_boundary_iso = datetime.fromtimestamp(now_ts + float(settings.get_effective_cycle_seconds()), tz=timezone.utc).isoformat()
 
-        logger.info(f"=== [5-MIN BOUNDARY] Finalizing Input Window for Cycle #{self.cycle_id} -> Transitioning to ADAPTATION ===")
+        logger.info(f"=== [CYCLE BOUNDARY] Finalizing Input Window for Cycle #{self.cycle_id} -> Transitioning to ADAPTATION ===")
 
         # 1. Aggregate signals & query verified macOS state
         window_summary = self.current_window.get_aggregated_state() if self.current_window else {}
@@ -444,8 +503,8 @@ class CycleScheduler:
         did = insert_decision({
             'timestamp': now_iso,
             'cycle_id': self.cycle_id,
-            'emotion': current_state['emotion']['dominant'],
-            'emotion_confidence': current_state['emotion']['confidence'],
+            'emotion': current_state.get('emotion', {}).get('dominant', 'Focused'),
+            'emotion_confidence': current_state.get('emotion', {}).get('confidence', 0.85),
             'workload': current_state['workload']['score'],
             'adaptive_score': as_score,
             'ass': as_score,
@@ -525,11 +584,11 @@ class CycleScheduler:
 
         # 10. Complete transition into ADAPTATION
         self.phase = "ADAPTATION"
-        logger.info(f"Cycle #{self.cycle_id} now in ADAPTATION phase. OS Adaptation '{decision.action}' active for next 5 minutes.")
+        logger.info(f"Cycle #{self.cycle_id} now in ADAPTATION phase. OS Adaptation '{decision.action}' active for next adaptation window.")
 
     def _transition_to_input_collection(self):
         """
-        Exact transition: ADAPTATION -> INPUT_COLLECTION at the 5-minute boundary.
+        Exact transition: ADAPTATION -> INPUT_COLLECTION at the cycle boundary.
         1. Finalizes the previous cycle in the DB.
         2. Increments cycle_id.
         3. Re-opens the camera according to privacy settings.
@@ -539,7 +598,7 @@ class CycleScheduler:
         now_ts = time.time()
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        logger.info(f"=== [5-MIN BOUNDARY] Ending Adaptation Phase -> Starting INPUT_COLLECTION for Cycle #{self.cycle_id + 1} ===")
+        logger.info(f"=== [CYCLE BOUNDARY] Ending Adaptation Phase -> Starting INPUT_COLLECTION for Cycle #{self.cycle_id + 1} ===")
 
         if self.active_cycle_row_id:
             update_cycle_phase(self.active_cycle_row_id, phase='COMPLETED', end_time=now_iso, status='SUCCESS')

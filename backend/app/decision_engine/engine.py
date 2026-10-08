@@ -288,7 +288,7 @@ class PersonalizationEngine:
             pass
 
     def record_cycle_observation(self, state: Dict[str, Any], is_extreme: bool = False):
-        """Updates all key personal signal baselines after a 5-minute cycle evaluation."""
+        """Updates all key personal signal baselines after a cycle evaluation."""
         if not settings.personalization_enabled:
             return
 
@@ -431,10 +431,12 @@ class DecisionEngine:
         """
         Calculates the Adaptive Score (AS) combining:
         - EmotionComponent (valence and focus)
-        - ContextComponent (relevance of active task)
+        - ContextComponent (relevance of active task * context confidence)
         - PersonalizationComponent (deviation from user's learned personal baseline)
         - WorkloadComponent (cognitive demand)
         Normalized to 0.00 – 1.00.
+        Formula:
+          AS = 0.35 * Emotion + 0.20 * Context + 0.30 * Workload + 0.15 * Personalization
         """
         probs = state.get('emotion', {}).get('probabilities', {})
         e = (
@@ -446,36 +448,37 @@ class DecisionEngine:
         e_norm = max(0.0, min(1.0, 0.5 + e * 0.5))
 
         ctx_info = state.get('context', {})
-        context = ctx_info.get('context', ctx_info.get('activity', 'GENERAL_WORK')).upper()
+        context = str(ctx_info.get('context', ctx_info.get('activity', 'GENERAL_WORK'))).upper()
+        ctx_conf = float(ctx_info.get('confidence', ctx_info.get('context_confidence', 0.85)))
+
         if context in ['CODING', 'WRITING', 'STUDYING']:
-            c = 0.90
+            base_c = 0.90
         elif context in ['MEETING']:
-            c = 0.70
+            base_c = 0.70
         elif context in ['BROWSING']:
-            c = 0.50
+            base_c = 0.50
         elif context in ['GAMING', 'IDLE']:
-            c = 0.30
+            base_c = 0.30
         else:
-            c = 0.45
+            base_c = 0.45
 
-        w = state.get('workload', {}).get('score', 0.45)
-
-        # Personalization Component (how unusual current state is relative to personal baseline)
-        p = self.personalization.compute_unusualness_component(state)
+        c_eff = max(0.0, min(1.0, base_c * ctx_conf))
+        w = float(state.get('workload', {}).get('score', 0.45))
+        p = float(self.personalization.compute_unusualness_component(state))
 
         weights = settings.as_weights
-        w_e = weights.get('emotion', 0.35)
-        w_c = weights.get('context', 0.20)
-        w_w = weights.get('workload', 0.30)
-        w_p = weights.get('personalization', 0.15)
+        w_e = float(weights.get('emotion', 0.35))
+        w_c = float(weights.get('context', 0.20))
+        w_w = float(weights.get('workload', 0.30))
+        w_p = float(weights.get('personalization', 0.15))
 
         total_weight = w_e + w_c + w_w + w_p
-        score = (w_e * e_norm + w_c * c + w_w * w + w_p * p) / max(0.01, total_weight)
+        score = (w_e * e_norm + w_c * c_eff + w_w * w + w_p * p) / max(0.01, total_weight)
         score = max(0.0, min(1.0, round(score, 3)))
 
         components = {
             'emotion': round(e_norm, 3),
-            'context': round(c, 3),
+            'context': round(c_eff, 3),
             'workload': round(w, 3),
             'personalization': round(p, 3)
         }
@@ -486,7 +489,8 @@ class DecisionEngine:
         score, components = self.calculate_as(state)
         emotion = state.get('emotion', {}).get('dominant', 'Focused')
         probs = state.get('emotion', {}).get('probabilities', {})
-        workload = state.get('workload', {}).get('score', 0.40)
+        evidence = state.get('emotion', {}).get('evidence_signals', {})
+        workload = float(state.get('workload', {}).get('score', 0.40))
 
         ctx_info = state.get('context', {})
         context = str(ctx_info.get('context', ctx_info.get('activity', 'GENERAL_WORK'))).upper()
@@ -494,10 +498,25 @@ class DecisionEngine:
 
         inputs = state.get('inputs', {})
         cam = inputs.get('camera', {})
-        ambient = cam.get('ambient_light', 0.5)
         kb = inputs.get('keyboard', {})
-        backspace_rate = kb.get('avg_backspace_rate', kb.get('backspace_rate', 0.0))
-        typing_rate = kb.get('avg_typing_rate', kb.get('typing_rate', 0.0))
+        ms = inputs.get('mouse', {})
+
+        typing_rate = float(kb.get('typing_rate', 0.0))
+        backspace_rate = float(kb.get('backspace_rate', 0.0))
+        typing_activity_ratio = float(kb.get('typing_activity_ratio', 0.5 if typing_rate > 0 else 0.0))
+        mouse_active_ratio = float(ms.get('mouse_active_ratio', 0.5 if not ms.get('idle') else 0.0))
+        mouse_agitation = float(evidence.get('mouse_agitation_score', ms.get('jitter', 0.0)))
+
+        frustration_signal = float(evidence.get('frustration_signal', probs.get('Frustrated', 0.0)))
+        fatigue_signal = float(evidence.get('fatigue_signal', probs.get('Fatigued', 0.0)))
+        focus_signal = float(evidence.get('focus_signal', probs.get('Focused', 0.0)))
+        relaxed_signal = float(evidence.get('relaxed_signal', probs.get('Relaxed', 0.0)))
+
+        cam_conditions = cam.get('conditions', {})
+        ambient = float(cam.get('ambient_light', 0.50))
+        dim_proxy = bool(cam_conditions.get('dim_proxy', ambient < 0.25))
+        bright_proxy = bool(cam_conditions.get('bright_proxy', ambient > 0.65))
+        cam_valid = bool(cam_conditions.get('valid_camera_observation', cam.get('confidence', 0.0) >= 0.5))
 
         # Synchronize with ground truth OS state
         real_os = state.get('actual_os_state') or {}
@@ -507,55 +526,41 @@ class DecisionEngine:
             self.in_focus_mode = bool(real_os['focus_mode_active'])
         if 'audio_muted' in real_os and real_os['audio_muted'] is not None:
             self.audio_muted = bool(real_os['audio_muted'])
-        curr_brightness = real_os.get('brightness', 0.5)
-        curr_volume = real_os.get('volume', 50)
+        curr_brightness = float(real_os.get('brightness', 0.50))
+        curr_volume = int(real_os.get('volume', 50))
 
         # Personalization deviations
         devs = self.personalization.calculate_personal_deviations(state)
-        workload_dev = devs['workload']['deviation']
+        workload_dev = float(devs['workload']['deviation'])
+        workload_z = float(devs['workload']['z_score'])
         is_calibrating = (self.personalization.status == "CALIBRATING")
 
-        # Configurable thresholds
-        t = settings.thresholds
-        sens = settings.sensitivity
-        sens_multiplier = 0.85 if sens in ['ultra_responsive', 'high'] else 1.0
-
-        th_workload_high = t.get('workload_high', 0.40) * sens_multiplier
-        th_frust_high = t.get('frustration_high', 0.25) * sens_multiplier
-        th_fatigue_high = t.get('fatigue_high', 0.25) * sens_multiplier
-        th_backspace_high = t.get('typing_error_high', 0.08) * sens_multiplier
-        th_dim = t.get('ambient_dim_threshold', 0.35)
-        th_bright = t.get('ambient_bright_threshold', 0.60)
-
-        # -------------------------------------------------------------
-        # SEPARATE DECISION CONFIDENCE FROM ADAPTIVE SCORE (Feature 10)
-        # -------------------------------------------------------------
+        # Decision confidence
         sensor_coverage = 0
-        if kb.get('events', 0) > 0 or typing_rate > 0.0:
+        if kb.get('active', False) and (typing_rate > 0.0 or kb.get('events', 0) > 0):
             sensor_coverage += 1
-        if not inputs.get('mouse', {}).get('idle', True):
+        if ms.get('active', False) and not ms.get('idle', True):
             sensor_coverage += 1
-        if cam.get('active', False) and cam.get('face_detected', False):
+        if cam_valid:
             sensor_coverage += 1
 
-        base_conf = 0.62 + (0.16 * context_conf) + (0.05 * sensor_coverage)
+        base_conf = 0.65 + (0.15 * context_conf) + (0.06 * sensor_coverage)
         if is_calibrating:
-            base_conf = min(0.82, base_conf)
+            base_conf = min(0.85, base_conf)
         else:
-            base_conf = min(0.95, base_conf + 0.04)
-
+            base_conf = min(0.96, base_conf + 0.04)
         conf = round(base_conf, 2)
 
-        # If confidence is too low for automatic adaptation:
+        # Confidence Guard: if overall confidence is too low, fail closed to NO_ACTION
         if conf < settings.thresholds.get('decision_score_min', 0.30):
             return Decision(
                 action='NO_ACTION',
-                reason='Insufficient confidence for automatic adaptation.',
+                reason='Insufficient sensor confidence for automatic adaptation.',
                 confidence=conf,
                 policy='Confidence Guard',
                 adaptive_score=score,
                 explanation={
-                    'assessment_window': '5 minutes',
+                    'assessment_window': f"{int(settings.get_effective_cycle_seconds() / 60)} minute" if settings.get_effective_cycle_seconds() == 60 else f"{settings.get_effective_cycle_seconds() / 60:.1f} minutes",
                     'context': context,
                     'context_confidence': int(context_conf * 100),
                     'emotion': emotion,
@@ -563,193 +568,209 @@ class DecisionEngine:
                     'adaptive_score': score,
                     'decision_confidence': int(conf * 100),
                     'action': 'NO_ACTION',
-                    'why': 'Insufficient confidence for automatic adaptation.',
-                    'factors': ['Decision confidence below safe threshold']
+                    'why': 'Insufficient sensor confidence for automatic adaptation.',
+                    'factors': ['Confidence below safety threshold']
                 }
             )
 
-        # -------------------------------------------------------------
-        # CONTEXT-AWARE ADAPTATION RULES (Feature 9)
-        # -------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # DETERMINISTIC SAFETY & DECISION HIERARCHY (Parts 9, 10, 18)
+        # ---------------------------------------------------------------------
         action = 'NO_ACTION'
-        reason = 'Activity nominal. User state remained stable.'
+        reason = 'Activity nominal. User state remained stable within comfort thresholds.'
         personal_note = None
         contributing_factors = []
 
-        # RULE CONTEXT MODIFIER 1: MEETING
+        # 1. PRIORITY 1: MEETING SAFETY (Never mute meeting audio, suppress intrusive changes)
         if context == 'MEETING':
-            # Safeguard meeting audio: if audio was muted, unmute it so meeting audio is audible
             if self.audio_muted:
                 action = 'UNMUTE_AUDIO'
-                reason = 'Active meeting detected; system audio unmuted so meeting participants can be heard clearly.'
+                reason = 'Active meeting detected; system audio unmuted so call audio remains audible.'
                 self.audio_muted = False
                 contributing_factors.append('Meeting audio safeguard')
-            elif (emotion == 'Fatigued' or probs.get('Fatigued', 0.0) > th_fatigue_high) and workload > 0.40:
+            elif fatigue_signal >= 0.60:
                 action = 'SUGGEST_BREAK'
-                reason = f'Elevated fatigue during meeting session; subtle wellness chime suggested.'
-                contributing_factors.append('Fatigue in active meeting')
+                reason = f'Elevated fatigue ({int(fatigue_signal * 100)}%) during meeting; break reminder suggested.'
+                contributing_factors.append('Fatigue during meeting')
             else:
                 action = 'NO_ACTION'
                 reason = 'Active meeting in progress. Intrusive desktop adaptations suppressed.'
-                contributing_factors.append('Meeting context active')
+                contributing_factors.append('Meeting safety guard active')
 
-        # RULE CONTEXT MODIFIER 2: GAMING
+        # 2. PRIORITY 2: GAMING SAFETY (Suppress intrusive interruptions)
         elif context == 'GAMING':
             action = 'NO_ACTION'
             reason = 'Active gaming session detected. Adaptations suppressed to prevent interruption.'
             contributing_factors.append('Gaming context active')
 
-        # RULE CONTEXT MODIFIER 3: IDLE
-        elif context == 'IDLE':
+        # 3. PRIORITY 3: IDLE / USER AWAY (Part 9, Action 2 & Part 28 Scenario G)
+        elif context == 'IDLE' or (typing_activity_ratio < 0.10 and mouse_active_ratio < 0.10 and ms.get('idle', False)):
             if self.in_focus_mode:
                 action = 'DISABLE_FOCUS_MODE'
-                reason = 'User is currently idle/away. Focus Mode disengaged.'
+                reason = 'User is away or idle. Native Focus Mode disengaged.'
                 self.in_focus_mode = False
                 contributing_factors.append('Idle state observed')
             elif self.audio_muted:
                 action = 'UNMUTE_AUDIO'
-                reason = 'User is currently idle/away; system audio unmuted.'
+                reason = 'User is idle; standard system audio unmuted.'
                 self.audio_muted = False
                 contributing_factors.append('Idle audio restoration')
             elif curr_brightness < 0.45:
                 action = 'RESTORE_BRIGHTNESS'
-                reason = 'User idle; standard display brightness restored.'
+                reason = 'User is idle; standard display brightness restored.'
                 contributing_factors.append('Idle brightness recovery')
             else:
                 action = 'NO_ACTION'
-                reason = 'User currently idle. Environment stable.'
+                reason = 'User currently idle. System state nominal.'
+                contributing_factors.append('Idle state nominal')
 
-        # RULE CONTEXT MODIFIER 4: CODING / WRITING / STUDYING / GENERAL WORK
+        # 4. ACTIVE WORK CONTEXTS (CODING, WRITING, STUDYING, GENERAL_WORK)
         else:
-            # Trigger 1: Environmental Ambient Lighting (Dark Mode vs Light Mode)
-            if ambient < th_dim and not self.dark_mode_active:
-                action = 'ENABLE_DARK_MODE'
-                reason = f'Low background lighting ({ambient:.2f} < {th_dim:.2f}); Dark Mode engaged automatically for eye comfort.'
-                self.dark_mode_active = True
-                contributing_factors.append('Low ambient lighting')
-
-            elif ambient > th_bright and self.dark_mode_active:
-                action = 'DISABLE_DARK_MODE'
-                reason = f'Bright background lighting ({ambient:.2f} > {th_bright:.2f}); macOS Light appearance restored automatically.'
-                self.dark_mode_active = False
-                contributing_factors.append('Bright ambient lighting')
-
-            # Trigger 2: Frustration & Auditory Sensory Relief
-            elif (emotion == 'Frustrated' or probs.get('Frustrated', 0.0) > th_frust_high or backspace_rate > th_backspace_high) and not self.audio_muted:
+            # Step A: STRONG FRUSTRATION -> MUTE_AUDIO (Part 9, Action 3)
+            # Requires multi-modal agreement (kb correction + mouse agitation) or severe frustration signal
+            is_frustrated = (
+                (frustration_signal >= 0.60 and (backspace_rate >= 0.10 or mouse_agitation >= 0.35))
+                or (frustration_signal >= 0.75)
+            )
+            if is_frustrated and not self.audio_muted:
                 action = 'MUTE_AUDIO'
-                reason = f'Elevated frustration ({int(probs.get("Frustrated", 0.0) * 100)}%) / typing friction; system audio muted to eliminate auditory stress.'
+                reason = (
+                    f"Elevated typing correction ({int(backspace_rate * 100)}%) and cursor agitation "
+                    f"during {context.lower()} session indicated sustained frustration. Audio was muted to minimize distraction."
+                )
                 self.audio_muted = True
-                contributing_factors.append('Auditory stress relief for frustration')
+                contributing_factors.append(f"Typing correction {int(backspace_rate * 100)}%")
+                contributing_factors.append(f"Mouse agitation {mouse_agitation:.2f}")
 
-            # Trigger 2B: High Coding Frustration & Debugging Assistance (if already muted)
-            elif (emotion == 'Frustrated' or probs.get('Frustrated', 0.0) > th_frust_high or backspace_rate > th_backspace_high) and (context in ['CODING'] or typing_rate > 0.8):
-                action = 'SUGGEST_DEBUG_RESOURCE'
-                reason = f'Elevated friction / backspace error rate ({int(backspace_rate * 100)}%) detected while coding.'
-                contributing_factors.append('High typing error rate')
-                contributing_factors.append('Frustration detected in coding')
+            # Step B: STRONG FATIGUE / VISUAL STRAIN -> REDUCE_BRIGHTNESS (Part 9, Action 7)
+            elif (fatigue_signal >= 0.55 or (fatigue_signal >= 0.45 and cam_conditions.get('persistent_low_eye_visibility', False))) and curr_brightness > 0.45:
+                action = 'REDUCE_BRIGHTNESS'
+                reason = f'Elevated visual fatigue ({int(fatigue_signal * 100)}%) detected; display brightness reduced to relieve eye strain.'
+                contributing_factors.append('Visual fatigue indicators')
+                contributing_factors.append(f'Current brightness {int(curr_brightness * 100)}% > 45%')
 
-            # Trigger 3: Focus Mode Activation (Personalized Workload Elevation or High Engagement)
-            elif (workload >= th_workload_high or (not is_calibrating and workload_dev >= 0.18) or emotion in ['Focused', 'Flow State'] or probs.get('Focused', 0.0) > 0.35) and (context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']) and not self.in_focus_mode:
+            # Step C: HIGH WORKLOAD / DEEP FOCUS -> ENABLE_FOCUS_MODE (Part 9, Action 1)
+            # Must satisfy: workload >= 0.60 OR workload z-score >= +1.5 OR focus_signal >= 0.65 with productive context
+            # AND typing or mouse activity >= 0.35 AND context_conf >= 0.60 AND Focus is OFF
+            elif (
+                (workload >= 0.60 or workload_z >= 1.5 or (focus_signal >= 0.65 and context in ['CODING', 'WRITING', 'STUDYING']))
+                and (typing_activity_ratio >= 0.35 or mouse_active_ratio >= 0.35)
+                and context_conf >= 0.60
+                and not self.in_focus_mode
+            ):
                 action = 'ENABLE_FOCUS_MODE'
-                if not is_calibrating and workload_dev >= 0.18:
-                    reason = f'Workload was significantly higher than your personal baseline ({devs["workload"]["current"]} vs {devs["workload"]["baseline"]}, deviation {workload_dev:+.2f}) while {context.lower()}; notification alerts silenced & focus mode engaged.'
+                if workload_z >= 1.5 and not is_calibrating:
+                    reason = f'Workload was significantly higher than personal baseline (z={workload_z:+.1f}) while {context.lower()}; Focus Mode engaged.'
                     personal_note = f"Personal workload deviation: {workload_dev:+.2f}"
                     contributing_factors.append('Personal baseline deviation exceeded')
                 else:
-                    reason = f'Elevated cognitive workload ({int(workload * 100)}%) in {context.lower()}; desktop decluttered & notification alerts silenced.'
+                    reason = f'Elevated cognitive workload ({int(workload * 100)}%) in {context.lower()}; desktop notifications silenced & Focus Mode engaged.'
                     contributing_factors.append('High cognitive workload')
                 self.in_focus_mode = True
 
-            # Trigger 3B: Deep Focus Audio Muting (Sustained Focus with Focus Mode already active)
-            elif self.in_focus_mode and not self.audio_muted and (workload >= th_workload_high or emotion in ['Focused', 'Flow State']):
-                action = 'MUTE_AUDIO'
-                reason = f'Sustained deep focus & immersion ({int(probs.get("Focused", 0.0) * 100)}%); system audio muted to eliminate disruptive noises.'
-                self.audio_muted = True
-                contributing_factors.append('Deep focus audio muting')
+            # Step D: VISUAL ENVIRONMENT LIGHTING (Part 9, Actions 5 & 6)
+            # ENABLE_DARK_MODE: camera valid AND dim proxy persistently < 0.25 AND productive context AND (fatigue >= 0.35 OR workload >= 0.40) AND not already dark
+            elif cam_valid and dim_proxy and (fatigue_signal >= 0.35 or workload >= 0.40) and not self.dark_mode_active:
+                action = 'ENABLE_DARK_MODE'
+                reason = f'Low ambient illumination proxy ({ambient:.2f} < 0.25) during focused work; macOS Dark Mode engaged for eye comfort.'
+                self.dark_mode_active = True
+                contributing_factors.append('Low ambient illumination')
 
-            # Trigger 4: Eye Strain / Visual Fatigue / Screen Glare -> Reduce Brightness
-            elif (emotion in ['Fatigued', 'Frustrated'] or workload > 0.50 or ambient < th_dim) and curr_brightness > 0.35:
-                action = 'REDUCE_BRIGHTNESS'
-                reason = f'Visual strain or sustained focus detected; physical display brightness dimmed by 20% to reduce glare.'
-                contributing_factors.append('Glare and visual fatigue reduction')
+            # DISABLE_DARK_MODE: camera valid AND bright proxy persistently > 0.65 AND user actively working AND fatigue not elevated AND already dark
+            elif cam_valid and bright_proxy and (typing_activity_ratio >= 0.20 or mouse_active_ratio >= 0.20) and fatigue_signal < 0.30 and self.dark_mode_active:
+                action = 'DISABLE_DARK_MODE'
+                reason = f'Bright ambient illumination proxy ({ambient:.2f} > 0.65); macOS Light appearance restored.'
+                self.dark_mode_active = False
+                contributing_factors.append('Bright ambient illumination')
 
-            # Trigger 5: Fatigue / Break Recommendation
-            elif (emotion == 'Fatigued' or probs.get('Fatigued', 0.0) > th_fatigue_high) and workload > 0.25:
-                action = 'SUGGEST_BREAK'
-                reason = f'Sustained workload ({int(workload * 100)}%) with fatigue indicators; recommended wellness pause.'
-                contributing_factors.append('Elevated fatigue indicators')
-
-            # Trigger 6: Recovery / Relaxed State -> Unmute Audio
-            elif self.audio_muted and (emotion in ['Relaxed'] or (workload < 0.25 and emotion != 'Frustrated')):
+            # Step E: RECOVERY / RESTORATION (Part 9, Actions 2, 4, 8)
+            elif self.audio_muted and (relaxed_signal >= 0.60 or workload < 0.30 or frustration_signal < 0.25):
                 action = 'UNMUTE_AUDIO'
-                reason = 'Cognitive workload eased and user in relaxed state; system audio unmuted.'
+                reason = 'Cognitive workload eased and frustration subsided; system audio restored to original user volume.'
                 self.audio_muted = False
-                contributing_factors.append('Relaxed state audio unmute')
+                contributing_factors.append('Frustration recovery')
 
-            # Trigger 7: Exit Focus Mode when relaxed/idle
-            elif emotion in ['Relaxed'] and self.in_focus_mode and typing_rate < 0.2:
+            elif self.in_focus_mode and (relaxed_signal >= 0.60 or workload < 0.30) and typing_rate < 0.30:
                 action = 'DISABLE_FOCUS_MODE'
-                reason = 'Workload eased; standard desktop notifications & audio restored.'
+                reason = 'Workload eased and user entered relaxed recovery; native Focus Mode disengaged.'
                 self.in_focus_mode = False
-                contributing_factors.append('Relaxed cognitive recovery')
+                contributing_factors.append('Focus recovery')
 
-            # Trigger 8: Bright Ambient Light / Recovery -> Restore Brightness
-            elif (ambient > th_bright or emotion in ['Relaxed']) and curr_brightness < 0.50:
+            elif curr_brightness < 0.50 and (relaxed_signal >= 0.60 or bright_proxy) and fatigue_signal < 0.25:
                 action = 'RESTORE_BRIGHTNESS'
-                reason = f'Bright environment or relaxed state; display brightness restored to standard level.'
-                contributing_factors.append('Ambient lighting brightness restoration')
+                reason = 'Visual strain cleared and ambient environment bright; original display brightness restored.'
+                contributing_factors.append('Brightness recovery')
 
-        # -------------------------------------------------------------
-        # AUTOMATIC POLICY LEARNING (Feature 13 - LinUCB Bandit)
-        # -------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # AUTOMATIC POLICY LEARNING WITH STRICT SAFETY GUARDS (Part 19 - LinUCB)
+        # ---------------------------------------------------------------------
         candidate_actions = ['NO_ACTION']
-        if workload > 0.3 or emotion == 'Fatigued':
-            candidate_actions.append('SUGGEST_BREAK')
 
-        # Focus Mode candidates: only when actively working, never when idle or relaxed
-        if not self.in_focus_mode:
-            if context not in ['IDLE', 'GAMING'] and emotion != 'Relaxed':
-                candidate_actions.append('ENABLE_FOCUS_MODE')
+        if context == 'GAMING':
+            # Priority safety: Zero intrusive adaptations during gaming
+            candidate_actions = ['NO_ACTION']
+        elif context == 'MEETING':
+            # Priority safety: Never mute or dim during meeting
+            candidate_actions = ['NO_ACTION']
+            if self.audio_muted:
+                candidate_actions.append('UNMUTE_AUDIO')
+        elif context == 'IDLE':
+            # Only restorations allowed during idle
+            candidate_actions = ['NO_ACTION']
+            if self.in_focus_mode:
+                candidate_actions.append('DISABLE_FOCUS_MODE')
+            if self.audio_muted:
+                candidate_actions.append('UNMUTE_AUDIO')
+            if curr_brightness < 0.45:
+                candidate_actions.append('RESTORE_BRIGHTNESS')
         else:
-            candidate_actions.append('DISABLE_FOCUS_MODE')
+            # Active work contexts: strictly safe legal actions
+            # Focus Mode candidates: only when actively working
+            if not self.in_focus_mode:
+                if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] and not (typing_activity_ratio < 0.15 and mouse_active_ratio < 0.15):
+                    candidate_actions.append('ENABLE_FOCUS_MODE')
+            else:
+                candidate_actions.append('DISABLE_FOCUS_MODE')
 
-        if not self.dark_mode_active:
-            candidate_actions.append('ENABLE_DARK_MODE')
-        else:
-            candidate_actions.append('DISABLE_DARK_MODE')
+            # Dark Mode candidates: only when camera data is valid
+            if cam_valid:
+                if not self.dark_mode_active:
+                    candidate_actions.append('ENABLE_DARK_MODE')
+                else:
+                    candidate_actions.append('DISABLE_DARK_MODE')
 
-        if not self.audio_muted:
-            candidate_actions.append('MUTE_AUDIO')
-        else:
-            candidate_actions.append('UNMUTE_AUDIO')
+            # Audio candidates: only if frustration is elevated
+            if not self.audio_muted:
+                if frustration_signal >= 0.50:
+                    candidate_actions.append('MUTE_AUDIO')
+            else:
+                candidate_actions.append('UNMUTE_AUDIO')
 
-        if curr_brightness > 0.35:
-            candidate_actions.append('REDUCE_BRIGHTNESS')
-        if curr_brightness < 0.55:
-            candidate_actions.append('RESTORE_BRIGHTNESS')
+            # Brightness candidates: only if fatigue is elevated
+            if fatigue_signal >= 0.45 and curr_brightness > 0.45:
+                candidate_actions.append('REDUCE_BRIGHTNESS')
+            if curr_brightness < 0.50 and fatigue_signal < 0.30:
+                candidate_actions.append('RESTORE_BRIGHTNESS')
 
         if action not in candidate_actions:
             candidate_actions.append(action)
 
         policy_name = 'Baseline Rules'
-        if self.policy_learner.total_feedback_count > 0:
+        if self.policy_learner.total_feedback_count > 0 and context not in ['MEETING', 'GAMING']:
             features = self.policy_learner.featurize(state, score, context)
             best_bandit_action, bandit_conf, bandit_val = self.policy_learner.predict(features, candidate_actions)
 
             if self.policy_learner.status in ['LEARNING', 'ADAPTIVE']:
-                # If baseline rule had NO_ACTION, let learned bandit trigger preferred adaptation
-                if action == 'NO_ACTION' and best_bandit_action != 'NO_ACTION' and bandit_val > 0.05:
+                if action == 'NO_ACTION' and best_bandit_action != 'NO_ACTION' and bandit_val > 0.10:
                     action = best_bandit_action
                     conf = bandit_conf
                     policy_name = f'Learned LinUCB ({self.policy_learner.status})'
                     reason = f'Learned policy selected {action.replace("_", " ").title()} based on {self.policy_learner.total_feedback_count} feedback samples (Bandit UCB score: {bandit_val:.2f}).'
                     contributing_factors.append(f'Learned bandit recommendation ({action})')
-                # If in ADAPTIVE mode and the bandit strongly favors an alternative action
-                # (guarded so lighting ergonomics, acute sensory relief, and context safeguards are strictly preserved):
                 elif (
                     self.policy_learner.status == 'ADAPTIVE'
                     and best_bandit_action != action
-                    and bandit_val > 0.20
+                    and bandit_val > 0.25
                     and action not in ['ENABLE_DARK_MODE', 'DISABLE_DARK_MODE', 'MUTE_AUDIO', 'UNMUTE_AUDIO']
                     and context not in ['MEETING', 'IDLE', 'GAMING']
                 ):
@@ -762,10 +783,8 @@ class DecisionEngine:
                 else:
                     policy_name = f'Baseline Rules ({self.policy_learner.status} Active)'
 
-        # Check if extreme distress state
+        # Check for extreme distress state before updating personalization baselines
         is_extreme = emotion in ['Frustrated', 'Fatigued'] and (workload > 0.70 or backspace_rate > 0.20)
-
-        # Record cycle observation in personal baseline
         self.personalization.record_cycle_observation(state, is_extreme=is_extreme)
 
         if action != 'NO_ACTION':
@@ -773,18 +792,20 @@ class DecisionEngine:
             self.last_action_time[action] = now
             self.action_history.append((now, action, reason))
 
-        # -------------------------------------------------------------
-        # STRUCTURED DECISION EXPLANATION (Feature 10)
-        # -------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # STRUCTURED DECISION EXPLANATION (Part 22)
+        # ---------------------------------------------------------------------
         explanation = {
-            'assessment_window': '5 minutes',
+            'assessment_window': f"{int(settings.get_effective_cycle_seconds() / 60)} minute" if settings.get_effective_cycle_seconds() == 60 else f"{settings.get_effective_cycle_seconds() / 60:.1f} minutes",
             'context': context.title(),
             'context_confidence': int(context_conf * 100),
             'emotion': f"{emotion} ({int(probs.get(emotion, 0.5) * 100)}%)",
             'workload': f"{int(workload * 100)}%",
             'personal_baseline_workload': f"{int(devs['workload']['baseline'] * 100)}%",
             'workload_deviation': f"{workload_dev:+.2f}",
-            'typing_deviation': f"{devs['typing_rate']['deviation']:+.1f} keys/s",
+            'typing_rate': f"{typing_rate:.1f} keys/s",
+            'backspace_ratio': f"{int(backspace_rate * 100)}%",
+            'mouse_agitation': round(mouse_agitation, 2),
             'adaptive_score': score,
             'decision_confidence': int(conf * 100),
             'selected_action': action.replace('_', ' ').title(),

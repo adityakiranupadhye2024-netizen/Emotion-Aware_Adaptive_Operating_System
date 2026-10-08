@@ -76,14 +76,19 @@ class NotificationService:
             if self.notify_all_assessments:
                 should_display_popup = True
 
+        cycle_sec = int(settings.get_effective_cycle_seconds())
+        cycle_mm = cycle_sec // 60
+        cycle_ss = cycle_sec % 60
+        cycle_time_str = f"{cycle_mm:02d}:{cycle_ss:02d}"
+
         if action == "NO_ACTION":
             title = "EAOS Assessment Complete"
-            subtitle = f"5-Min Assessment #{cycle_id} · Context: {context}"
+            subtitle = f"Assessment #{cycle_id} · Context: {context}"
             message = (
                 f"Adaptive Score: {adaptive_score:.2f} (Stable)\n"
                 f"Context: {context}\n"
                 f"Reason: {reason}\n"
-                f"Next assessment in 05:00"
+                f"Next assessment in {cycle_time_str}"
             )
         else:
             title = "EAOS Adaptation"
@@ -92,7 +97,7 @@ class NotificationService:
                 f"Context: {context}\n"
                 f"Action: {action_clean} applied\n"
                 f"Reason: {reason}\n"
-                f"Next assessment in 05:00"
+                f"Next assessment in {cycle_time_str}"
             )
 
         delivery_status = "delivered" if should_display_popup else "suppressed_by_rule"

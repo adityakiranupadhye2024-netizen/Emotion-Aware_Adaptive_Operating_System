@@ -46,7 +46,7 @@ from app.services.scheduler import CycleScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("eaos.main")
 
-app = FastAPI(title="EAOS API — Continuous 5-Minute Adaptive Cycle", version="2.5.0")
+app = FastAPI(title="EAOS API — Continuous Adaptive Cycle", version="2.5.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,7 +73,7 @@ last_context_time = 0.0
 
 @app.on_event("startup")
 async def startup():
-    logger.info("Initializing EAOS database and subsystems for 5-minute continuous cycle...")
+    logger.info("Initializing EAOS database and subsystems for continuous adaptive cycle...")
     init_db()
 
     # Load persistent settings
@@ -92,9 +92,9 @@ async def startup():
     except Exception as e:
         logger.warning(f"Sensor startup issue: {e}")
 
-    # Start repeating 5-minute cycle scheduler
+    # Start repeating adaptive cycle scheduler
     scheduler.start()
-    logger.info(f"EAOS 5-minute continuous adaptive cycle active. Personalization: {engine.personalization.status}")
+    logger.info(f"EAOS continuous adaptive cycle active. Personalization: {engine.personalization.status}")
 
 @app.on_event("shutdown")
 def shutdown():
@@ -151,7 +151,7 @@ def get_current_telemetry_snapshot():
     conf_emo = state.get('emotion', {}).get('confidence', 0.85)
     camera.set_current_emotion(dominant_emo, conf_emo)
 
-    # Send periodic telemetry sample to current 5-minute observation window
+    # Send periodic telemetry sample to current observation window
     scheduler.sample_telemetry(
         kb=kb,
         ms=ms,
@@ -178,9 +178,9 @@ def get_current_telemetry_snapshot():
         else:
             latest_decision = {
                 'action': 'NO_ACTION',
-                'reason': 'Initial 5-minute input window active. Monitoring signals.',
+                'reason': 'Initial input window active. Monitoring signals.',
                 'confidence': 0.85,
-                'policy': 'Personalized 5-Minute Adaptive Engine',
+                'policy': 'Personalized Adaptive Engine',
                 'adaptive_score': as_score,
                 'status': 'input_collection',
                 'timestamp': now_iso
@@ -416,6 +416,23 @@ def health():
         'decision_engine': 'RUNNING',
         'os_actuator': 'READY' if actuator.system == 'Darwin' else 'SIMULATED',
         'actual_os_state': os_state,
+        'diagnostics': {
+            'keyboard_listener_active': bool(keyboard.active),
+            'mouse_listener_active': bool(mouse.active),
+            'camera_active': bool(camera.is_active()) if hasattr(camera, 'is_active') else False,
+            'camera_frame_age': round(time.time() - camera.last_frame_time, 2) if getattr(camera, 'last_frame_time', None) else None,
+            'context_last_update': datetime.fromtimestamp(getattr(context, 'last_update_time', time.time()), tz=timezone.utc).isoformat(),
+            'last_keyboard_event': keyboard.last_press_time,
+            'last_mouse_event': mouse.last_event,
+            'sample_count': len(scheduler.current_window.workload_samples) if scheduler.current_window else 0,
+            'camera_sample_count': len(scheduler.current_window.camera_samples) if scheduler.current_window else 0,
+            'input_window_duration': float(settings.get_effective_cycle_seconds()),
+            'phase': cycle['phase'],
+            'seconds_remaining': cycle['remaining_seconds'],
+            'last_decision': scheduler.latest_decision,
+            'last_action_execution': scheduler.latest_execution,
+            'last_verification': scheduler.latest_decision.get('verified') if scheduler.latest_decision else None
+        },
         'timestamp': datetime.now(timezone.utc).isoformat()
     }
 

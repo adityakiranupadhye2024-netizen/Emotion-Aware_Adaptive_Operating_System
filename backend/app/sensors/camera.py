@@ -1,6 +1,8 @@
 import time
 import logging
 import threading
+from collections import deque
+from typing import Dict, Any, List, Optional
 import numpy as np
 
 try:
@@ -32,6 +34,7 @@ class CameraSensor:
         self.latest_face_box = None
         self.latest_annotated_jpeg = None
         self.last_jpeg_time = 0.0
+        self.frame_history = deque(maxlen=600)
 
         self._clahe = None
         self._face_alt2 = None
@@ -306,7 +309,9 @@ class CameraSensor:
     def snapshot(self):
         """Processes current frame strictly in-memory and updates telemetry state."""
         with self._lock:
+            now_t = time.time()
             if not self.active or self.cap is None or not self.cap.isOpened():
+                self.frame_history.append({'timestamp': now_t, 'active': False, 'valid': False})
                 return {
                     'active': False,
                     'status': self.status_text,
@@ -325,6 +330,7 @@ class CameraSensor:
                 ok, frame = False, None
 
             if not ok or frame is None:
+                self.frame_history.append({'timestamp': now_t, 'active': True, 'valid': False})
                 return {
                     'active': True,
                     'status': self.status_text,
@@ -337,7 +343,7 @@ class CameraSensor:
                     'fatigue_score': round(self.fatigue_score, 2)
                 }
 
-            self.last_frame_time = time.time()
+            self.last_frame_time = now_t
             try:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 raw_ambient = float(np.mean(gray) / 255.0)
@@ -393,6 +399,17 @@ class CameraSensor:
                     self.confidence = 0.0
                     self.fatigue_score = max(0.0, self.fatigue_score - 0.05)
 
+                self.frame_history.append({
+                    'timestamp': now_t,
+                    'active': True,
+                    'valid': True,
+                    'face_detected': self.face_detected,
+                    'eyes_detected': self.eyes_detected,
+                    'smile_detected': self.smile_detected,
+                    'ambient_light': self.ambient_light,
+                    'confidence': self.confidence
+                })
+
                 # Store annotated frame for live feed caching
                 self.latest_annotated_jpeg = self._annotate_frame(frame, faces, eyes_found, smiles_found)
                 self.last_jpeg_time = time.time()
@@ -413,3 +430,99 @@ class CameraSensor:
                 'lighting_condition': self.lighting_condition,
                 'fatigue_score': round(self.fatigue_score, 2)
             }
+
+    def get_window_metrics(self, window_sec: float = 60.0) -> Dict[str, Any]:
+        """
+        Calculates all Part 3 camera visual signals and conditions across the observation window.
+        """
+        with self._lock:
+            now = time.time()
+            cutoff = now - window_sec
+            recent = [f for f in self.frame_history if f['timestamp'] >= cutoff]
+
+            total_samples = len(recent)
+            if total_samples == 0:
+                return {
+                    'camera_active_ratio': 0.0,
+                    'valid_frame_ratio': 0.0,
+                    'face_presence_ratio': 0.0,
+                    'eye_visibility_ratio': 0.0,
+                    'smile_presence_ratio': 0.0,
+                    'average_visual_light_proxy': 0.50,
+                    'low_light_ratio': 0.0,
+                    'no_face_ratio': 1.0,
+                    'face_detection_confidence': 0.0,
+                    'fatigue_proxy': 0.0,
+                    'camera_data_confidence': 0.0,
+                    'conditions': {
+                        'valid_camera_observation': False,
+                        'face_present': False,
+                        'strong_face_presence': False,
+                        'face_mostly_absent': True,
+                        'eyes_engaged': False,
+                        'low_eye_visibility': False,
+                        'persistent_low_eye_visibility': False,
+                        'smile_observed': False,
+                        'dim_proxy': False,
+                        'bright_proxy': False
+                    }
+                }
+
+            valid_frames = [f for f in recent if f.get('valid')]
+            valid_frame_ratio = len(valid_frames) / float(total_samples)
+
+            distinct_active_seconds = len(set(int(f['timestamp']) for f in recent if f.get('active')))
+            camera_active_ratio = min(1.0, distinct_active_seconds / max(1.0, window_sec))
+
+            face_frames = [f for f in valid_frames if f.get('face_detected')]
+            face_presence_ratio = len(face_frames) / float(len(valid_frames)) if valid_frames else 0.0
+            no_face_ratio = max(0.0, 1.0 - face_presence_ratio)
+
+            eye_frames = [f for f in face_frames if f.get('eyes_detected')]
+            eye_visibility_ratio = len(eye_frames) / float(len(face_frames)) if face_frames else 0.0
+
+            smile_frames = [f for f in face_frames if f.get('smile_detected')]
+            smile_presence_ratio = len(smile_frames) / float(len(face_frames)) if face_frames else 0.0
+
+            ambients = [f.get('ambient_light', 0.5) for f in valid_frames]
+            avg_light = (sum(ambients) / len(ambients)) if ambients else 0.50
+            low_light_count = sum(1 for a in ambients if a < 0.25)
+            low_light_ratio = low_light_count / float(len(ambients)) if ambients else 0.0
+
+            confidences = [f.get('confidence', 0.0) for f in face_frames]
+            face_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
+
+            persistent_low_eyes = (eye_visibility_ratio < 0.40 and face_presence_ratio >= 0.60)
+            low_eye_visibility = (eye_visibility_ratio < 0.45 and face_presence_ratio >= 0.60)
+            fatigue_proxy = round(max(0.0, min(1.0, (1.0 - eye_visibility_ratio) * 0.7 + (0.3 if persistent_low_eyes else 0.0))), 3) if face_presence_ratio >= 0.50 else 0.0
+
+            cam_conf = round(valid_frame_ratio * (0.3 + 0.7 * face_presence_ratio), 3) if valid_frame_ratio >= 0.5 else 0.0
+
+            conditions = {
+                'valid_camera_observation': valid_frame_ratio >= 0.70,
+                'face_present': face_presence_ratio >= 0.60,
+                'strong_face_presence': face_presence_ratio >= 0.80,
+                'face_mostly_absent': face_presence_ratio < 0.30,
+                'eyes_engaged': (eye_visibility_ratio >= 0.65 and face_presence_ratio >= 0.50),
+                'low_eye_visibility': low_eye_visibility,
+                'persistent_low_eye_visibility': persistent_low_eyes,
+                'smile_observed': smile_presence_ratio >= 0.40,
+                'dim_proxy': avg_light < 0.25,
+                'bright_proxy': avg_light > 0.65
+            }
+
+            return {
+                'camera_active_ratio': round(camera_active_ratio, 3),
+                'valid_frame_ratio': round(valid_frame_ratio, 3),
+                'face_presence_ratio': round(face_presence_ratio, 3),
+                'eye_visibility_ratio': round(eye_visibility_ratio, 3),
+                'smile_presence_ratio': round(smile_presence_ratio, 3),
+                'average_visual_light_proxy': round(avg_light, 3),
+                'low_light_ratio': round(low_light_ratio, 3),
+                'no_face_ratio': round(no_face_ratio, 3),
+                'face_detection_confidence': round(face_conf, 3),
+                'fatigue_proxy': fatigue_proxy,
+                'camera_data_confidence': cam_conf,
+                'conditions': conditions
+            }
+
