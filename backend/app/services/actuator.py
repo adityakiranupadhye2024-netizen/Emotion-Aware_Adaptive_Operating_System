@@ -242,56 +242,64 @@ class MacActuator:
 
         # 2. ENABLE_DARK_MODE (Part 9, Action 5)
         elif action == 'ENABLE_DARK_MODE':
-            # 1. Native AppleScript (instant & reliable system-wide change)
-            as_ok = False
+            # 1. Native AppleScript to set exact dark mode (instant & reliable)
+            cmd_ok = False
             try:
                 r = subprocess.run(
                     ['osascript', '-e', 'tell application "System Events" to tell appearance preferences to set dark mode to true'],
                     capture_output=True, timeout=2
                 )
-                as_ok = (r.returncode == 0)
+                cmd_ok = (r.returncode == 0)
             except Exception as e:
                 logger.warning(f"AppleScript dark mode error: {e}")
 
-            # 2. Also trigger macOS Shortcut
-            sc_ok = run_shortcut('Set Appearance', 'Dark')
-            cmd_ok = as_ok or sc_ok
             time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
+
+            # Fallback to shortcut if needed
+            if state_after.get('dark_mode') is not True:
+                sc_ok = run_shortcut('Set Appearance')
+                cmd_ok = cmd_ok or sc_ok
+                time.sleep(0.15)
+                state_after = self.get_current_os_state(force_refresh=True)
 
             verified = (state_after.get('dark_mode') is True)
             success = verified and cmd_ok
             if verified:
                 self.eaos_owned_dark_mode = True
                 record_os_state_event('DARK_MODE', 'ON', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "AppleScript + Shortcut: Set Appearance ('Dark')", state_before, state_after, verified, success,
+            return self._build_result(action, "AppleScript: Set Appearance ('Dark')", state_before, state_after, verified, success,
                                       'macOS Dark Mode enabled and verified.', start_t, now_iso)
 
         # 3. DISABLE_DARK_MODE (Part 9, Action 6)
         elif action == 'DISABLE_DARK_MODE':
-            # 1. Native AppleScript (instant & reliable system-wide change)
-            as_ok = False
+            # 1. Native AppleScript to set exact light mode
+            cmd_ok = False
             try:
                 r = subprocess.run(
                     ['osascript', '-e', 'tell application "System Events" to tell appearance preferences to set dark mode to false'],
                     capture_output=True, timeout=2
                 )
-                as_ok = (r.returncode == 0)
+                cmd_ok = (r.returncode == 0)
             except Exception as e:
                 logger.warning(f"AppleScript light mode error: {e}")
 
-            # 2. Also trigger macOS Shortcut
-            sc_ok = run_shortcut('Set Appearance', 'Light')
-            cmd_ok = as_ok or sc_ok
             time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
+
+            # Fallback to shortcut if needed
+            if state_after.get('dark_mode') is not False:
+                sc_ok = run_shortcut('Set Appearance')
+                cmd_ok = cmd_ok or sc_ok
+                time.sleep(0.15)
+                state_after = self.get_current_os_state(force_refresh=True)
 
             verified = (state_after.get('dark_mode') is False)
             success = verified and cmd_ok
             if verified:
                 self.eaos_owned_dark_mode = False
                 record_os_state_event('DARK_MODE', 'OFF', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "AppleScript + Shortcut: Set Appearance ('Light')", state_before, state_after, verified, success,
+            return self._build_result(action, "AppleScript: Set Appearance ('Light')", state_before, state_after, verified, success,
                                       'macOS Light Mode restored and verified.', start_t, now_iso)
 
         # 4. ENABLE_FOCUS_MODE / SILENCE_NOTIFICATIONS (Part 9, Action 1)
