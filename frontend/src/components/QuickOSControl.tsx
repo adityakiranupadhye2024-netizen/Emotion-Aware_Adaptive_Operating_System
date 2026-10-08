@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { executeOSAction } from '../services/api';
 
 interface QuickOSControlProps {
@@ -42,8 +42,24 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState<boolean>(true);
 
-  const isDarkMode = osState?.dark_mode ?? false;
-  const isFocusOn = !!osState?.focus_mode_active;
+  const [localDarkMode, setLocalDarkMode] = useState<boolean>(osState?.dark_mode ?? true);
+  const [localFocusOn, setLocalFocusOn] = useState<boolean>(!!osState?.focus_mode_active);
+
+  useEffect(() => {
+    if (osState?.dark_mode !== undefined) {
+      setLocalDarkMode(osState.dark_mode);
+      document.body.classList.toggle('light-theme', !osState.dark_mode);
+    }
+  }, [osState?.dark_mode]);
+
+  useEffect(() => {
+    if (osState?.focus_mode_active !== undefined) {
+      setLocalFocusOn(!!osState.focus_mode_active);
+    }
+  }, [osState?.focus_mode_active]);
+
+  const isDarkMode = localDarkMode;
+  const isFocusOn = localFocusOn;
   const isMuted = osState?.audio_muted ?? false;
   const brightnessPct = osState?.brightness_pct ?? (osState?.brightness !== undefined ? Math.round(osState.brightness * 100) : 50);
   const volumePct = osState?.volume_pct ?? osState?.volume ?? 50;
@@ -61,6 +77,15 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
       const res = await executeOSAction(action, reason, value);
       setIsSuccess(res?.execution?.verified ?? true);
       setLastMessage(res?.execution?.message || `${(action === 'MUTE_AUDIO' ? 'AUDIO DECREASED' : action.replace(/_/g, ' '))} executed and verified on macOS.`);
+      if (res?.actual_os_state) {
+        if (res.actual_os_state.dark_mode !== undefined) {
+          setLocalDarkMode(res.actual_os_state.dark_mode);
+          document.body.classList.toggle('light-theme', !res.actual_os_state.dark_mode);
+        }
+        if (res.actual_os_state.focus_mode_active !== undefined) {
+          setLocalFocusOn(!!res.actual_os_state.focus_mode_active);
+        }
+      }
       if (onActionTriggered) {
         onActionTriggered(res);
       }
@@ -194,7 +219,11 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
       }}>
         {/* 1. Dark Mode */}
         <button
-          onClick={() => handleAction('ENABLE_DARK_MODE', 'User switched macOS to Dark Mode')}
+          onClick={() => {
+            setLocalDarkMode(true);
+            document.body.classList.remove('light-theme');
+            handleAction('ENABLE_DARK_MODE', 'User switched macOS to Dark Mode');
+          }}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',
@@ -222,7 +251,11 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
 
         {/* 2. Light Mode */}
         <button
-          onClick={() => handleAction('DISABLE_DARK_MODE', 'User switched macOS to Light Mode')}
+          onClick={() => {
+            setLocalDarkMode(false);
+            document.body.classList.add('light-theme');
+            handleAction('DISABLE_DARK_MODE', 'User switched macOS to Light Mode');
+          }}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',
@@ -250,10 +283,14 @@ export const QuickOSControl: React.FC<QuickOSControlProps> = ({
 
         {/* 3. Focus / DND Mode Toggle */}
         <button
-          onClick={() => handleAction(
-            isFocusOn ? 'DISABLE_FOCUS_MODE' : 'ENABLE_FOCUS_MODE',
-            isFocusOn ? 'User turned off DND Mode' : 'User turned on Focus / DND Mode'
-          )}
+          onClick={() => {
+            const nextFocus = !isFocusOn;
+            setLocalFocusOn(nextFocus);
+            handleAction(
+              nextFocus ? 'ENABLE_FOCUS_MODE' : 'DISABLE_FOCUS_MODE',
+              nextFocus ? 'User turned on Focus / DND Mode' : 'User turned off DND Mode'
+            );
+          }}
           disabled={loadingAction !== null}
           style={{
             padding: '10px 14px',

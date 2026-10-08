@@ -78,6 +78,14 @@ export default function App() {
 
 
   const isAutomationOn = state?.cycle?.automation_enabled ?? true;
+  const isDarkMode = state?.actual_os_state?.dark_mode;
+  const isFocusOn = !!state?.actual_os_state?.focus_mode_active;
+
+  React.useEffect(() => {
+    if (isDarkMode !== undefined) {
+      document.body.classList.toggle('light-theme', !isDarkMode);
+    }
+  }, [isDarkMode]);
 
   return (
     <div className="app">
@@ -112,6 +120,19 @@ export default function App() {
 
         <div className="content">
           <NotificationToast latestDecision={state?.decision} />
+          {isFocusOn && (
+            <div className="dnd-active-banner">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '1.25rem' }}>🔕</span>
+                <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                  DO NOT DISTURB ACTIVE · All system alerts & notifications silenced
+                </span>
+              </div>
+              <span style={{ fontSize: '0.75rem', background: 'rgba(6, 182, 212, 0.25)', padding: '3px 8px', borderRadius: 4, fontWeight: 700 }}>
+                DND MODE ENGAGED
+              </span>
+            </div>
+          )}
           {resetMsg && (
             <div className="toast-msg">
               <span>✓</span>

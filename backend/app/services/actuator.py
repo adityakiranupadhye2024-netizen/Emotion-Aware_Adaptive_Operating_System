@@ -242,75 +242,107 @@ class MacActuator:
 
         # 2. ENABLE_DARK_MODE (Part 9, Action 5)
         elif action == 'ENABLE_DARK_MODE':
-            if state_before.get('dark_mode') is True:
-                return self._already_in_state(action, state_before, 'macOS Dark Mode is already active.')
+            # 1. Native AppleScript (instant & reliable system-wide change)
+            as_ok = False
+            try:
+                r = subprocess.run(
+                    ['osascript', '-e', 'tell application "System Events" to tell appearance preferences to set dark mode to true'],
+                    capture_output=True, timeout=2
+                )
+                as_ok = (r.returncode == 0)
+            except Exception as e:
+                logger.warning(f"AppleScript dark mode error: {e}")
 
-            cmd_ok = run_shortcut('Set Appearance', 'Dark')
-            time.sleep(0.25)
+            # 2. Also trigger macOS Shortcut
+            sc_ok = run_shortcut('Set Appearance', 'Dark')
+            cmd_ok = as_ok or sc_ok
+            time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
 
-            # Strict verification (Part 12): actual state after must be Dark
             verified = (state_after.get('dark_mode') is True)
             success = verified and cmd_ok
             if verified:
                 self.eaos_owned_dark_mode = True
                 record_os_state_event('DARK_MODE', 'ON', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "Shortcut: Set Appearance ('Dark')", state_before, state_after, verified, success,
+            return self._build_result(action, "AppleScript + Shortcut: Set Appearance ('Dark')", state_before, state_after, verified, success,
                                       'macOS Dark Mode enabled and verified.', start_t, now_iso)
 
         # 3. DISABLE_DARK_MODE (Part 9, Action 6)
         elif action == 'DISABLE_DARK_MODE':
-            if state_before.get('dark_mode') is False:
-                return self._already_in_state(action, state_before, 'macOS Light Mode is already active.')
+            # 1. Native AppleScript (instant & reliable system-wide change)
+            as_ok = False
+            try:
+                r = subprocess.run(
+                    ['osascript', '-e', 'tell application "System Events" to tell appearance preferences to set dark mode to false'],
+                    capture_output=True, timeout=2
+                )
+                as_ok = (r.returncode == 0)
+            except Exception as e:
+                logger.warning(f"AppleScript light mode error: {e}")
 
-            cmd_ok = run_shortcut('Set Appearance', 'Light')
-            time.sleep(0.25)
+            # 2. Also trigger macOS Shortcut
+            sc_ok = run_shortcut('Set Appearance', 'Light')
+            cmd_ok = as_ok or sc_ok
+            time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
 
-            # Strict verification: actual state after must be Light
             verified = (state_after.get('dark_mode') is False)
             success = verified and cmd_ok
             if verified:
                 self.eaos_owned_dark_mode = False
                 record_os_state_event('DARK_MODE', 'OFF', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "Shortcut: Set Appearance ('Light')", state_before, state_after, verified, success,
+            return self._build_result(action, "AppleScript + Shortcut: Set Appearance ('Light')", state_before, state_after, verified, success,
                                       'macOS Light Mode restored and verified.', start_t, now_iso)
 
         # 4. ENABLE_FOCUS_MODE / SILENCE_NOTIFICATIONS (Part 9, Action 1)
         elif action in ['ENABLE_FOCUS_MODE', 'SILENCE_NOTIFICATIONS']:
-            if state_before.get('focus_mode_active') is True:
-                return self._already_in_state(action, state_before, 'Focus / DND Mode is already active.')
-
-            cmd_ok = run_shortcut('Turn On DND', 'On')
             self.focus_active = True
             self.eaos_owned_dnd = True
-            time.sleep(0.25)
+
+            # Trigger Shortcut: try both standard and parameter invocation
+            cmd_ok = run_shortcut('Turn On DND') or run_shortcut('Turn On DND', 'On')
+            time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
 
             verified = bool(cmd_ok and (state_after.get('focus_mode_active') is True or self.focus_active))
             success = verified and cmd_ok
             if success:
                 record_os_state_event('FOCUS_MODE', 'ON', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "Shortcut: Turn On DND ('On')", state_before, state_after, verified, success,
+            return self._build_result(action, "Shortcut: Turn On DND", state_before, state_after, verified, success,
                                       'Native Focus / DND mode engaged.', start_t, now_iso)
 
         # 5. DISABLE_FOCUS_MODE (Part 9, Action 2)
         elif action == 'DISABLE_FOCUS_MODE':
-            if state_before.get('focus_mode_active') is False:
-                return self._already_in_state(action, state_before, 'Focus / DND Mode is already inactive.')
-
-            cmd_ok = run_shortcut('Turn On DND', 'Off')
             self.focus_active = False
             self.eaos_owned_dnd = False
-            time.sleep(0.25)
+
+            # Trigger Shortcut
+            cmd_ok = run_shortcut('Turn On DND') or run_shortcut('Turn On DND', 'Off')
+            time.sleep(0.15)
             state_after = self.get_current_os_state(force_refresh=True)
 
             verified = bool(cmd_ok and (state_after.get('focus_mode_active') is False or not self.focus_active))
             success = verified and cmd_ok
             if success:
                 record_os_state_event('FOCUS_MODE', 'OFF', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
-            return self._build_result(action, "Shortcut: Turn On DND ('Off')", state_before, state_after, verified, success,
+            return self._build_result(action, "Shortcut: Turn On DND", state_before, state_after, verified, success,
                                       'Focus / DND mode disengaged.', start_t, now_iso)
+
+        # 5b. TOGGLE_FOCUS_MODE (Demo Support)
+        elif action == 'TOGGLE_FOCUS_MODE':
+            new_focus = not self.focus_active
+            self.focus_active = new_focus
+            self.eaos_owned_dnd = new_focus
+
+            cmd_ok = run_shortcut('Turn On DND')
+            time.sleep(0.15)
+            state_after = self.get_current_os_state(force_refresh=True)
+
+            verified = bool(cmd_ok)
+            success = verified
+            record_os_state_event('FOCUS_MODE', 'ON' if new_focus else 'OFF', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
+            return self._build_result(action, "Shortcut: Turn On DND (Toggle)", state_before, state_after, verified, success,
+                                      f'Focus / DND mode toggled to {"ON" if new_focus else "OFF"}.', start_t, now_iso)
 
         # 6. MUTE_AUDIO / REDUCE_AUDIO (Part 9, Action 3 & Part 14)
         elif action == 'MUTE_AUDIO':
