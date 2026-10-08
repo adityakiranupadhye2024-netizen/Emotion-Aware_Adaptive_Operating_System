@@ -1,15 +1,18 @@
-import random
 import time
+import logging
 from typing import Dict, Any, Optional
 
+logger = logging.getLogger("eaos.state")
+
 EMOTIONS = ['Focused', 'Frustrated', 'Fatigued', 'Confused', 'Relaxed', 'Flow State']
+FACIAL_EXPRESSIONS = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
 
 
 class StateBuilder:
     """
     Multimodal state calculation service.
-    Fuses real behavioral telemetry from Keyboard, Mouse, Camera, and Context sensors
-    into normalized evidence signals, cognitive workload, and emotion probabilities.
+    Fuses real behavioral telemetry from Keyboard, Mouse, Context, and DeepFace Camera sensors
+    into normalized evidence signals, cognitive workload, and EAOS emotion probabilities.
     """
 
     def compute_multimodal_state(
@@ -30,16 +33,16 @@ class StateBuilder:
         is_idle: bool = False
     ) -> Dict[str, Any]:
         """
-        Pure multimodal evidence calculation following Parts 5 & 6 specifications.
+        Authoritative multimodal evidence calculation.
+        DeepFace provides facial expression evidence; final EAOS state requires multimodal fusion.
         """
-        # 1. Cognitive Workload Calculation (Part 6)
-        # Does NOT allow CPU percentage to dominate human cognitive workload.
-        typing_intensity = min(1.0, typing_rate / 4.0)
-        typing_act = min(1.0, max(typing_activity_ratio, 1.0 if typing_rate > 1.5 else (typing_rate / 1.5)))
-        correction_load = min(1.0, backspace_rate / 0.20)
-        mouse_act = min(1.0, mouse_active_ratio)
-        context_switching_load = min(1.0, switch_rate / 4.0)
-        session_load = min(1.0, session_minutes / 90.0)
+        # 1. Cognitive Workload Calculation (Human behavioral workload, not just CPU)
+        typing_intensity = min(1.0, max(0.0, typing_rate / 4.0))
+        typing_act = min(1.0, max(0.0, max(typing_activity_ratio, 1.0 if typing_rate > 1.5 else (typing_rate / 1.5))))
+        correction_load = min(1.0, max(0.0, backspace_rate / 0.20))
+        mouse_act = min(1.0, max(0.0, mouse_active_ratio))
+        context_switching_load = min(1.0, max(0.0, switch_rate / 4.0))
+        session_load = min(1.0, max(0.0, session_minutes / 90.0))
 
         workload = (
             0.35 * typing_intensity
@@ -57,80 +60,153 @@ class StateBuilder:
             else 'LOW'
         )
 
-        # 2. Camera Visual Evidence (Part 3)
-        cam_fatigue = float(camera_metrics.get('fatigue_proxy', 0.0))
+        # 2. Camera & DeepFace Facial Evidence Extraction
         cam_conf = float(camera_metrics.get('camera_data_confidence', 0.0))
-        smile_observed = bool(camera_metrics.get('conditions', {}).get('smile_observed', False))
-        dim_proxy = bool(camera_metrics.get('conditions', {}).get('dim_proxy', False))
-        bright_proxy = bool(camera_metrics.get('conditions', {}).get('bright_proxy', False))
-        avg_ambient = float(camera_metrics.get('average_visual_light_proxy', 0.50))
+        face_conf = float(camera_metrics.get('face_detection_confidence', camera_metrics.get('face_confidence', 0.0)))
+        face_present = bool(
+            camera_metrics.get('conditions', {}).get('face_present', False)
+            or camera_metrics.get('face_detected', False)
+        )
+        cam_active = bool(camera_metrics.get('active', False) or camera_metrics.get('camera_active_ratio', 0.0) > 0.0)
 
-        # 3. Multimodal Modality Scores (Part 5)
+        # Facial emotion distribution from DeepFace
+        facial_dist = camera_metrics.get('facial_emotion_distribution') or camera_metrics.get('smoothed_facial_emotions') or {}
+        facial_consistency = float(camera_metrics.get('emotion_consistency', 0.50))
+        facial_frust_signal = float(camera_metrics.get('facial_frustration', 0.0))
+        facial_fatigue_signal = float(camera_metrics.get('facial_fatigue', camera_metrics.get('fatigue_proxy', 0.0)))
+        facial_relax_signal = float(camera_metrics.get('facial_relaxation', 0.0))
+
+        has_valid_face = face_present and cam_active and (face_conf > 0.25 or cam_conf > 0.25)
+
+        # 3. Behavioral Telemetry Normalization
         keyboard_correction_score = min(1.0, backspace_rate / 0.18)
         mouse_agitation_score = min(1.0, jitter_score / 0.30)
         switching_score = min(1.0, switch_rate / 3.5)
         instability_score = min(1.0, rhythm_cv / 0.90) if rhythm_cv > 0.0 else 0.0
 
-        # Frustration signal: 0.40 kb_correction + 0.30 mouse_agitation + 0.15 switching + 0.15 instability
-        frustration_raw = (
-            0.40 * keyboard_correction_score
-            + 0.30 * mouse_agitation_score
-            + 0.15 * switching_score
-            + 0.15 * instability_score
+        # Frustration Score Fusion
+        # Facial angry + disgust + instability + keyboard correction + mouse agitation
+        if has_valid_face:
+            frustration_raw = (
+                0.35 * facial_frust_signal
+                + 0.35 * keyboard_correction_score
+                + 0.20 * mouse_agitation_score
+                + 0.10 * switching_score
+            )
+        else:
+            # Re-weight gracefully when camera or face is unavailable
+            frustration_raw = (
+                0.50 * keyboard_correction_score
+                + 0.35 * mouse_agitation_score
+                + 0.15 * switching_score
+            )
+
+        # Safeguard: Strong frustration requires backspace_rate >= 0.10 AND at least one corroborating indicator
+        angry_disgust_evidence = (
+            facial_dist.get('angry', 0.0) >= 0.20
+            or facial_dist.get('disgust', 0.0) >= 0.15
         )
-        # Suppress frustration if completely idle
+        corroborated_frustration = (
+            mouse_agitation_score >= 0.30
+            or switching_score >= 0.40
+            or (has_valid_face and angry_disgust_evidence)
+            or instability_score >= 0.40
+        )
+        if backspace_rate < 0.10 and not (mouse_agitation_score >= 0.50 or (has_valid_face and angry_disgust_evidence)):
+            frustration_raw *= 0.40
+        elif not corroborated_frustration and frustration_raw > 0.35:
+            # Backspaces alone must NOT classify strong frustration
+            frustration_raw *= 0.50
+
         if is_idle or (typing_rate < 0.2 and mouse_act < 0.15):
             frustration_raw *= 0.20
 
-        # Fatigue signal: 0.35 low_typing + 0.25 prolonged_idle + 0.25 cam_fatigue + 0.15 session_duration
+        # Fatigue Score Fusion
         low_typing_activity_score = max(0.0, 1.0 - min(1.0, typing_rate / 1.2))
         prolonged_idle_score = min(1.0, idle_seconds / 35.0)
         session_duration_score = min(1.0, session_minutes / 60.0)
 
-        fatigue_raw = (
-            0.35 * low_typing_activity_score
-            + 0.25 * prolonged_idle_score
-            + 0.25 * cam_fatigue
-            + 0.15 * session_duration_score
-        )
+        if has_valid_face:
+            fatigue_raw = (
+                0.30 * facial_fatigue_signal
+                + 0.25 * low_typing_activity_score
+                + 0.20 * max(0.0, 1.0 - mouse_act)
+                + 0.15 * prolonged_idle_score
+                + 0.10 * session_duration_score
+            )
+        else:
+            fatigue_raw = (
+                0.40 * low_typing_activity_score
+                + 0.25 * max(0.0, 1.0 - mouse_act)
+                + 0.20 * prolonged_idle_score
+                + 0.15 * session_duration_score
+            )
 
-        # Focus signal: 0.35 typing_engagement + 0.20 mouse_engagement + 0.20 productive_context + 0.15 low_correction + 0.10 stable_interaction
+        # Focus Score Fusion
         typing_engagement = min(1.0, typing_rate / 3.0)
         mouse_engagement = mouse_act
         is_productive = 1.0 if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] else 0.2
         low_correction_score = max(0.0, 1.0 - min(1.0, backspace_rate / 0.10))
         stable_interaction_score = max(0.0, 1.0 - mouse_agitation_score)
 
-        focus_raw = (
-            0.35 * typing_engagement
-            + 0.20 * mouse_engagement
-            + 0.20 * is_productive
-            + 0.15 * low_correction_score
-            + 0.10 * stable_interaction_score
-        )
+        # Facial focus support: consistent, calm/attentive facial expression (neutral/happy with high consistency)
+        if has_valid_face:
+            calm_face = facial_dist.get('neutral', 0.0) * 0.6 + facial_dist.get('happy', 0.0) * 0.4
+            facial_focus_support = min(1.0, calm_face * (0.5 + 0.5 * facial_consistency))
+            focus_raw = (
+                0.30 * typing_engagement
+                + 0.20 * mouse_engagement
+                + 0.20 * is_productive
+                + 0.15 * low_correction_score
+                + 0.15 * facial_focus_support
+            )
+        else:
+            focus_raw = (
+                0.35 * typing_engagement
+                + 0.25 * mouse_engagement
+                + 0.25 * is_productive
+                + 0.15 * low_correction_score
+            )
+
         if is_idle or context in ['IDLE', 'GAMING']:
             focus_raw *= 0.25
 
-        # Flow State: high focus + rhythmically sustained typing + coding/writing + near-zero errors
-        if is_productive > 0.5 and typing_rate >= 2.0 and backspace_rate < 0.06 and mouse_agitation_score < 0.25:
+        # Flow State Fusion: High sustained typing + productive context + minimal errors + low agitation + low frustration
+        if (
+            is_productive > 0.5
+            and typing_rate >= 2.0
+            and backspace_rate < 0.06
+            and mouse_agitation_score < 0.25
+            and frustration_raw < 0.25
+            and focus_raw >= 0.50
+        ):
             flow_raw = 0.45 * typing_engagement + 0.35 * low_correction_score + 0.20 * stable_interaction_score
         else:
-            flow_raw = 0.04
+            flow_raw = 0.03
 
-        # Relaxed signal: 0.30 low_workload + 0.25 low_agitation + 0.20 stable_context + 0.15 cam_positive + 0.10 low_switching
-        relaxed_raw = (
-            0.30 * max(0.0, 1.0 - workload)
-            + 0.25 * max(0.0, 1.0 - mouse_agitation_score)
-            + 0.20 * (1.0 if context in ['BROWSING', 'GENERAL_WORK', 'IDLE'] else 0.5)
-            + 0.15 * (1.0 if smile_observed else 0.3)
-            + 0.10 * max(0.0, 1.0 - switching_score)
-        )
+        # Relaxation Score Fusion
+        if has_valid_face:
+            relaxed_raw = (
+                0.30 * facial_relax_signal
+                + 0.25 * max(0.0, 1.0 - workload)
+                + 0.20 * max(0.0, 1.0 - mouse_agitation_score)
+                + 0.15 * (1.0 if context in ['BROWSING', 'GENERAL_WORK', 'IDLE'] else 0.5)
+                + 0.10 * max(0.0, 1.0 - switching_score)
+            )
+        else:
+            relaxed_raw = (
+                0.35 * max(0.0, 1.0 - workload)
+                + 0.25 * max(0.0, 1.0 - mouse_agitation_score)
+                + 0.25 * (1.0 if context in ['BROWSING', 'GENERAL_WORK', 'IDLE'] else 0.5)
+                + 0.15 * max(0.0, 1.0 - switching_score)
+            )
 
-        # Confused signal: high switching with low task progress or browsing
+        # Confused Score Fusion: High app switching with low task progress / search / browsing
         confused_raw = (
-            0.45 * switching_score
+            0.40 * switching_score
             + 0.30 * max(0.0, 1.0 - typing_engagement)
-            + 0.25 * (1.0 if context == 'BROWSING' else 0.2)
+            + 0.20 * (1.0 if context == 'BROWSING' else 0.2)
+            + 0.10 * max(0.0, 1.0 - context_conf)
         )
 
         raw_scores = {
@@ -142,19 +218,27 @@ class StateBuilder:
             'Relaxed': max(0.03, relaxed_raw)
         }
 
+        # Normalize to exact probabilities sum = 1.0
         tot = sum(raw_scores.values())
         probs = {k: round(v / tot, 4) for k, v in raw_scores.items()}
+        # Handle exact rounding sum
+        diff = round(1.0 - sum(probs.values()), 4)
+        probs['Focused'] = round(probs['Focused'] + diff, 4)
+
         dominant = max(probs, key=probs.get)
         confidence = probs[dominant]
 
-        # Multi-factor evidence metrics
         evidence_signals = {
             'keyboard_correction_score': round(keyboard_correction_score, 3),
             'mouse_agitation_score': round(mouse_agitation_score, 3),
-            'camera_fatigue_score': round(cam_fatigue, 3),
+            'camera_fatigue_score': round(facial_fatigue_signal, 3),
+            'facial_frustration': round(facial_frust_signal, 3),
+            'facial_fatigue': round(facial_fatigue_signal, 3),
+            'facial_relaxation': round(facial_relax_signal, 3),
+            'emotion_consistency': round(facial_consistency, 3),
             'context_switching_score': round(switching_score, 3),
             'typing_engagement_score': round(typing_engagement, 3),
-            'mouse_engagement_score': round(mouse_engagement, 3),
+            'mouse_engagement_score': round(mouse_act, 3),
             'frustration_signal': round(frustration_raw, 3),
             'fatigue_signal': round(fatigue_raw, 3),
             'focus_signal': round(focus_raw, 3),
@@ -169,30 +253,46 @@ class StateBuilder:
             'dominant_emotion': dominant,
             'emotion_probabilities': probs,
             'emotion_confidence': round(confidence, 3),
-            'evidence_signals': evidence_signals
+            'evidence_signals': evidence_signals,
+            'facial_evidence': {
+                'available': has_valid_face,
+                'distribution': facial_dist,
+                'consistency': facial_consistency
+            }
         }
 
     def build(self, keyboard, mouse, camera, context, simulation: bool = False) -> Dict[str, Any]:
         """
         Instantaneous telemetry snapshot builder.
+        In LIVE mode, strictly consumes verified sensor telemetry with NO hardcoded fake values.
         """
         if simulation:
             probs = {e: 0.05 for e in EMOTIONS}
             probs['Focused'] = 0.62
             probs['Flow State'] = 0.18
             probs['Relaxed'] = 0.08
-            workload = 0.55 + random.uniform(-0.06, 0.06)
-            cam = {'active': False, 'status': 'CAMERA OFF', 'face_detected': False, 'confidence': 0.0, 'ambient_light': 0.50}
-            kb = {'active': True, 'events': random.randint(30, 80), 'avg_inter_key_interval': 0.18, 'typing_rate': 4.5, 'backspace_rate': 0.03}
-            ms = {'active': True, 'movement_distance': random.uniform(300, 800), 'jitter': 0.12, 'clicks': random.randint(5, 20), 'idle': False}
-            ctx = {'active_app': 'VS Code', 'window_title': 'EAOS — main.py', 'activity': 'Coding', 'session_duration': random.randint(600, 3600), 'app_switch_rate': 1.5, 'calendar_state': 'Free', 'system_load': {'cpu': 24.5, 'memory': 58.2, 'processes': 142}}
+            workload = 0.55
+            cam = {
+                'active': False, 'status': 'CAMERA OFF', 'face_detected': False, 'confidence': 0.0,
+                'ambient_light': 0.50, 'dominant_facial_emotion': 'neutral',
+                'raw_facial_emotions': {'neutral': 1.0}, 'smoothed_facial_emotions': {'neutral': 1.0},
+                'emotion_available': False, 'emotion_stale': True
+            }
+            kb = {'active': True, 'events': 50, 'avg_inter_key_interval': 0.18, 'typing_rate': 4.5, 'backspace_rate': 0.03}
+            ms = {'active': True, 'movement_distance': 450.0, 'jitter': 0.12, 'clicks': 10, 'idle': False}
+            ctx = {'active_app': 'VS Code', 'window_title': 'EAOS — main.py', 'activity': 'Coding', 'session_duration': 1200, 'app_switch_rate': 1.5, 'calendar_state': 'Free', 'system_load': {'cpu': 24.5, 'memory': 58.2, 'processes': 142}}
             dominant = 'Focused'
-            level = 'Moderate'
+            level = 'MODERATE'
             evidence = {}
         else:
             kb = keyboard.snapshot() if keyboard else {'active': False, 'events': 0, 'typing_rate': 0.0, 'backspace_rate': 0.0, 'avg_inter_key_interval': 0.0}
             ms = mouse.snapshot() if mouse else {'active': False, 'movement_distance': 0.0, 'jitter': 0.0, 'clicks': 0, 'idle': True}
-            cam = camera.snapshot() if camera else {'active': False, 'status': 'CAMERA OFF', 'face_detected': False, 'confidence': 0.0, 'ambient_light': 0.5}
+            cam = camera.snapshot() if camera else {
+                'active': False, 'status': 'CAMERA OFF', 'face_detected': False, 'confidence': 0.0,
+                'ambient_light': 0.5, 'dominant_facial_emotion': 'neutral',
+                'raw_facial_emotions': {'neutral': 1.0}, 'smoothed_facial_emotions': {'neutral': 1.0},
+                'emotion_available': False, 'emotion_stale': True
+            }
             cam_metrics = camera.get_window_metrics() if (camera and hasattr(camera, 'get_window_metrics')) else {}
             ctx = context.snapshot(
                 kb_rate=kb.get('typing_rate', 0.0),
@@ -223,7 +323,7 @@ class StateBuilder:
                 jitter_score=jitter,
                 click_rate=click_rate,
                 idle_seconds=idle_sec,
-                camera_metrics=cam_metrics,
+                camera_metrics=cam_metrics or cam,
                 context=context_name,
                 context_conf=context_conf,
                 switch_rate=switch_rate,
@@ -242,7 +342,18 @@ class StateBuilder:
                 'dominant': dominant,
                 'probabilities': probs,
                 'confidence': round(probs[dominant], 3),
-                'evidence_signals': evidence
+                'evidence_signals': evidence,
+                'facial': {
+                    'detected': cam.get('face_detected', False),
+                    'dominant': cam.get('dominant_facial_emotion', 'neutral'),
+                    'confidence': cam.get('emotion_confidence', 0.0),
+                    'consistency': cam.get('emotion_consistency', 0.5),
+                    'raw_emotions': cam.get('raw_facial_emotions', {}),
+                    'smoothed_emotions': cam.get('smoothed_facial_emotions', {}),
+                    'available': cam.get('emotion_available', False),
+                    'stale': cam.get('emotion_stale', True),
+                    'inference_age': cam.get('emotion_inference_age')
+                }
             },
             'context': ctx,
             'workload': {
@@ -261,7 +372,7 @@ class StateBuilder:
     def build_aggregated_cycle_state(self, window_summary: Dict[str, Any], simulation: bool = False) -> Dict[str, Any]:
         """
         Calculates the authoritative multimodal state at the 60-second observation boundary.
-        Fuses true aggregated metrics from Keyboard, Mouse, Camera, and Context.
+        Fuses true aggregated metrics from Keyboard, Mouse, DeepFace Camera, and Context.
         """
         if simulation or not window_summary:
             return self.build(None, None, None, None, simulation=True)
@@ -318,7 +429,14 @@ class StateBuilder:
                 'dominant': dominant,
                 'probabilities': probs,
                 'confidence': round(probs[dominant], 3),
-                'evidence_signals': evidence
+                'evidence_signals': evidence,
+                'facial': {
+                    'distribution': cam.get('facial_emotion_distribution', {}),
+                    'dominant': cam.get('dominant_facial_emotion', 'neutral'),
+                    'consistency': cam.get('emotion_consistency', 0.50),
+                    'observation_count': cam.get('emotion_observation_count', 0),
+                    'had_camera_window': cam.get('had_camera_window', False)
+                }
             },
             'context': {
                 'active_app': dominant_app,
@@ -344,6 +462,9 @@ class StateBuilder:
                     'ambient_light': cam.get('average_visual_light_proxy', 0.50),
                     'confidence': cam.get('camera_data_confidence', 0.0),
                     'fatigue_proxy': cam.get('fatigue_proxy', 0.0),
+                    'facial_emotion_distribution': cam.get('facial_emotion_distribution', {}),
+                    'dominant_facial_emotion': cam.get('dominant_facial_emotion', 'neutral'),
+                    'emotion_consistency': cam.get('emotion_consistency', 0.50),
                     'conditions': cam.get('conditions', {})
                 },
                 'keyboard': {

@@ -62,11 +62,21 @@ class InputObservationWindow:
         if cam and cam.get('active', False):
             self.camera_samples.append({
                 'face_detected': bool(cam.get('face_detected', False)),
+                'face_confidence': float(cam.get('face_confidence', cam.get('confidence', 0.0))),
                 'eyes_detected': bool(cam.get('eyes_detected', False)),
                 'smile_detected': bool(cam.get('smile_detected', False)),
                 'confidence': float(cam.get('confidence', 0.0)),
                 'ambient_light': float(cam.get('ambient_light', 0.5)),
-                'fatigue_score': float(cam.get('fatigue_score', 0.0))
+                'fatigue_score': float(cam.get('fatigue_score', 0.0)),
+                'dominant_facial_emotion': str(cam.get('dominant_facial_emotion', 'neutral')),
+                'smoothed_facial_emotions': dict(cam.get('smoothed_facial_emotions', {})),
+                'raw_facial_emotions': dict(cam.get('raw_facial_emotions', {})),
+                'emotion_confidence': float(cam.get('emotion_confidence', 0.0)),
+                'emotion_consistency': float(cam.get('emotion_consistency', 0.5)),
+                'facial_frustration': float(cam.get('facial_frustration', 0.0)),
+                'facial_fatigue': float(cam.get('facial_fatigue', 0.0)),
+                'facial_relaxation': float(cam.get('facial_relaxation', 0.0)),
+                'emotion_available': bool(cam.get('emotion_available', False))
             })
         self.workload_samples.append(float(workload))
 
@@ -95,7 +105,8 @@ class InputObservationWindow:
         face_detected_samples = sum(1 for s in self.camera_samples if s.get('face_detected'))
         face_presence_ratio = face_detected_samples / n_cam if self.camera_samples else 0.0
         avg_ambient = sum(s.get('ambient_light', 0.5) for s in self.camera_samples) / n_cam if self.camera_samples else 0.5
-        avg_face_conf = sum(s.get('confidence', 0.0) for s in self.camera_samples) / n_cam if self.camera_samples else 0.0
+        conf_list = [s.get('face_confidence', s.get('confidence', 0.0)) for s in self.camera_samples if s.get('face_detected')]
+        avg_face_conf = (sum(conf_list) / len(conf_list)) if conf_list else 0.0
         avg_fatigue = sum(s.get('fatigue_score', 0.0) for s in self.camera_samples) / n_cam if self.camera_samples else 0.0
 
         eye_detected_samples = sum(1 for s in self.camera_samples if s.get('eyes_detected'))
@@ -103,6 +114,50 @@ class InputObservationWindow:
 
         smile_detected_samples = sum(1 for s in self.camera_samples if s.get('smile_detected'))
         smile_ratio = smile_detected_samples / float(max(1, face_detected_samples)) if face_detected_samples > 0 else 0.0
+
+        # DeepFace 60-second Emotion Distribution Aggregation
+        valid_face_samples = [s for s in self.camera_samples if s.get('face_detected') and s.get('smoothed_facial_emotions')]
+        emotion_obs_count = len(valid_face_samples)
+
+        standard_emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
+        if emotion_obs_count > 0:
+            agg_facial_emotions: Dict[str, float] = {}
+            for k in standard_emotions:
+                agg_facial_emotions[k] = sum(s['smoothed_facial_emotions'].get(k, 0.0) for s in valid_face_samples) / float(emotion_obs_count)
+            tot_e = sum(agg_facial_emotions.values())
+            if tot_e > 0:
+                agg_facial_emotions = {k: round(v / tot_e, 4) for k, v in agg_facial_emotions.items()}
+            dominant_facial_emotion = max(agg_facial_emotions, key=agg_facial_emotions.get)
+            avg_consistency = sum(s.get('emotion_consistency', 0.5) for s in valid_face_samples) / float(emotion_obs_count)
+        else:
+            agg_facial_emotions = {k: 0.0 for k in standard_emotions}
+            agg_facial_emotions['neutral'] = 1.0
+            dominant_facial_emotion = 'neutral'
+            avg_consistency = 0.50
+
+        # Derived cycle-level facial evidence signals
+        instability = max(0.0, 1.0 - avg_consistency)
+        facial_frustration = round(
+            0.55 * agg_facial_emotions.get('angry', 0.0)
+            + 0.20 * agg_facial_emotions.get('disgust', 0.0)
+            + 0.10 * agg_facial_emotions.get('surprise', 0.0)
+            + 0.15 * instability,
+            3
+        )
+        facial_relaxation = round(
+            0.60 * agg_facial_emotions.get('happy', 0.0)
+            + 0.30 * agg_facial_emotions.get('neutral', 0.0)
+            + 0.10 * avg_consistency,
+            3
+        )
+        quality_penalty = max(0.0, 1.0 - avg_face_conf)
+        facial_fatigue = round(
+            0.45 * agg_facial_emotions.get('sad', 0.0)
+            + 0.20 * (1.0 - eye_vis_ratio)
+            + 0.20 * agg_facial_emotions.get('neutral', 0.0)
+            + 0.15 * quality_penalty,
+            3
+        )
 
         had_camera = len(self.camera_samples) > 0
         cam_conditions = {
@@ -156,6 +211,13 @@ class InputObservationWindow:
                 'avg_confidence': round(avg_face_conf, 2),
                 'camera_data_confidence': round(avg_face_conf * (0.3 + 0.7 * face_presence_ratio), 2) if had_camera else 0.0,
                 'fatigue_proxy': round(avg_fatigue, 2),
+                'facial_emotion_distribution': agg_facial_emotions,
+                'dominant_facial_emotion': dominant_facial_emotion,
+                'emotion_observation_count': emotion_obs_count,
+                'emotion_consistency': round(avg_consistency, 2),
+                'facial_frustration': facial_frustration,
+                'facial_fatigue': facial_fatigue,
+                'facial_relaxation': facial_relaxation,
                 'had_camera_window': had_camera,
                 'conditions': cam_conditions
             },
@@ -495,10 +557,54 @@ class CycleScheduler:
         backspace_rate = kb_summary.get('avg_backspace_rate', 0.0)
         mouse_jitter = ms_summary.get('avg_jitter', 0.0)
         camera_active = 1 if cam_summary.get('had_camera_window', False) else 0
-        emotion_probs = json.dumps(current_state.get('emotion', {}).get('probabilities', {}))
         canonical_context = current_state.get('context', {}).get('canonical_context', current_state.get('context', {}).get('dominant_activity', 'GENERAL_WORK'))
         decision_ctx_conf = getattr(decision, 'context_confidence', 0.80)
         decision_explanation = getattr(decision, 'explanation', None)
+
+        # Structured Cycle Boundary Log
+        cycle_banner = f"""
+================================================
+EAOS CYCLE #{self.cycle_id}
+INPUT WINDOW COMPLETE
+================================================
+
+Keyboard:
+  Typing Rate: {typing_rate:.1f} keys/s | Backspace Ratio: {int(backspace_rate * 100)}% | Rhythm CV: {kb_summary.get('typing_rhythm_cv', 0.0):.2f}
+
+Mouse:
+  Agitation (Jitter): {mouse_jitter:.3f} | Active Ratio: {int(ms_summary.get('mouse_active_ratio', 0.0) * 100)}% | Clicks: {ms_summary.get('click_rate', 0.0):.1f}/s
+
+Camera:
+  Status: {'ACTIVE' if camera_active else 'OFF'} | Face Presence: {int(cam_summary.get('face_presence_ratio', 0.0) * 100)}% | Light Proxy: {cam_summary.get('average_visual_light_proxy', 0.5):.2f}
+
+Facial:
+  Dominant Expression: {cam_summary.get('dominant_facial_emotion', 'None').upper()} | Consistency: {cam_summary.get('emotion_consistency', 0.0):.2f} | Obs Count: {cam_summary.get('emotion_observation_count', 0)}
+
+Context:
+  Activity: {canonical_context} | App Switches: {window_summary.get('context', {}).get('actual_app_switches', 0)} | Confidence: {decision_ctx_conf:.2f}
+
+Workload:
+  Score: {curr_workload:.2f} ({current_state.get('workload', {}).get('level', 'MODERATE')})
+
+Personalization:
+  Status: {self.engine.personalization.status} | Total Samples: {self.engine.personalization.total_cycle_samples} | Note: {decision.personalization_summary or 'Nominal'}
+
+Adaptive Score:
+  AS: {as_score:.2f} (Emotion: {as_components.get('emotion', 0.5):.2f}, Context: {as_components.get('context', 0.5):.2f}, Workload: {as_components.get('workload', 0.5):.2f}, Personalization: {as_components.get('personalization', 0.5):.2f})
+
+Decision:
+  Action: {decision.action} | Policy: {decision.policy} | Confidence: {decision.confidence:.2f} | Reason: {decision.reason}
+
+Actuator:
+  Command: {execution.get('command_used', 'NONE')} | Status: {execution.get('status', 'executed')}
+
+Verification:
+  Verified: {execution.get('verified', False)} | Success: {execution.get('success', False)}
+================================================
+"""
+        logger.info(cycle_banner)
+
+        emotion_probs = json.dumps(current_state.get('emotion', {}).get('probabilities', {}))
 
         did = insert_decision({
             'timestamp': now_iso,

@@ -653,7 +653,8 @@ class DecisionEngine:
             # Must satisfy: workload >= 0.60 OR workload z-score >= +1.5 OR focus_signal >= 0.65 with productive context
             # AND typing or mouse activity >= 0.35 AND context_conf >= 0.60 AND Focus is OFF
             elif (
-                (workload >= 0.60 or workload_z >= 1.5 or (focus_signal >= 0.65 and context in ['CODING', 'WRITING', 'STUDYING']))
+                (workload >= 0.60 or workload_z >= 1.5)
+                and context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']
                 and (typing_activity_ratio >= 0.35 or mouse_active_ratio >= 0.35)
                 and context_conf >= 0.60
                 and not self.in_focus_mode
@@ -756,7 +757,7 @@ class DecisionEngine:
             candidate_actions.append(action)
 
         policy_name = 'Baseline Rules'
-        if self.policy_learner.total_feedback_count > 0 and context not in ['MEETING', 'GAMING']:
+        if self.use_bandit and self.policy_learner.total_feedback_count > 0 and context not in ['MEETING', 'GAMING']:
             features = self.policy_learner.featurize(state, score, context)
             best_bandit_action, bandit_conf, bandit_val = self.policy_learner.predict(features, candidate_actions)
 

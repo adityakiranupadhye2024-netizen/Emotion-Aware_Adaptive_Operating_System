@@ -1,8 +1,10 @@
 import time
+import math
 import logging
 import threading
+import queue
 from collections import deque
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 
 try:
@@ -10,11 +12,42 @@ try:
 except Exception:
     cv2 = None
 
+try:
+    from deepface import DeepFace
+except Exception as e:
+    DeepFace = None
+
 logger = logging.getLogger("eaos.camera")
+
+FACIAL_EMOTIONS = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
 
 
 class CameraSensor:
-    def __init__(self):
+    """
+    Real-time vision and pretrained facial emotion sensor using DeepFace.
+    Operates an on-device local inference pipeline:
+      Camera Capture Thread / Stream
+            ↓
+      OpenCV Face Detection & Region Selection (Single Primary User)
+            ↓
+      Controlled Async Inference Worker (2–4 FPS decoupled from video stream)
+            ↓
+      DeepFace Emotion Analysis (actions=['emotion'], enforce_detection=False, detector_backend='opencv')
+            ↓
+      Normalized Probabilities [0.0 – 1.0] (sum = 1.0)
+            ↓
+      Temporal Exponential Moving Average (EMA) Smoothing & Consistency
+            ↓
+      Derived Facial Evidence Signals for EAOS Multimodal Fusion
+    """
+
+    def __init__(
+        self,
+        inference_interval: float = 0.35,
+        ema_alpha: float = 0.25,
+        stale_timeout_sec: float = 5.0,
+        detector_backend: str = "opencv"
+    ):
         self._lock = threading.Lock()
         self.cap = None
         self.active = False
@@ -22,20 +55,51 @@ class CameraSensor:
         self.eyes_detected = False
         self.smile_detected = False
         self.confidence = 0.0
+        self.face_confidence = 0.0
         self.ambient_light = 0.5
         self.lighting_condition = "NORMAL"
         self.fatigue_score = 0.0
-        self.last_frame_time = 0
+        self.last_frame_time = 0.0
         self.status_text = "CAMERA OFF"
 
         self.preview_requested = False
-        self.current_emotion_label = "Focused"
-        self.current_emotion_confidence = 0.85
-        self.latest_face_box = None
-        self.latest_annotated_jpeg = None
+        self.latest_face_box: Optional[Tuple[int, int, int, int]] = None
+        self.latest_annotated_jpeg: Optional[bytes] = None
         self.last_jpeg_time = 0.0
         self.frame_history = deque(maxlen=600)
 
+        # DeepFace & Facial Emotion Configuration
+        self.inference_interval = inference_interval
+        self.ema_alpha = ema_alpha
+        self.stale_timeout_sec = stale_timeout_sec
+        self.detector_backend = detector_backend
+
+        # State storage for DeepFace emotion inference
+        self.raw_facial_emotions: Dict[str, float] = {e: 0.0 for e in FACIAL_EMOTIONS}
+        self.raw_facial_emotions['neutral'] = 1.0
+        self.smoothed_facial_emotions: Dict[str, float] = dict(self.raw_facial_emotions)
+        self.dominant_facial_emotion: str = "neutral"
+        self.emotion_confidence: float = 0.0
+        self.emotion_available: bool = False
+        self.emotion_stale: bool = True
+        self.last_inference_time: float = 0.0
+        self.last_inference_duration_ms: float = 0.0
+        self.emotion_consistency: float = 0.5
+        self.total_inference_count: int = 0
+
+        # Derived facial evidence signals
+        self.facial_frustration: float = 0.0
+        self.facial_fatigue: float = 0.0
+        self.facial_relaxation: float = 0.0
+
+        # Rolling history of recent DeepFace predictions for temporal smoothing and consistency
+        self._emotion_history = deque(maxlen=15)
+
+        # Legacy display label for UI backwards compatibility
+        self.current_emotion_label = "Neutral"
+        self.current_emotion_confidence = 0.0
+
+        # Cascades for rapid frame annotation and eye tracking
         self._clahe = None
         self._face_alt2 = None
         self._face_default = None
@@ -55,9 +119,19 @@ class CameraSensor:
             except Exception as e:
                 logger.warning(f"Error loading OpenCV Haar Cascades: {e}")
 
+        # Controlled Background Inference Worker
+        self._frame_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._worker_running = True
+        self._last_submitted_time = 0.0
+        self._worker_thread = threading.Thread(target=self._inference_worker_loop, daemon=True)
+        self._worker_thread.start()
+
     def set_current_emotion(self, emotion: str, confidence: float = 0.85):
-        self.current_emotion_label = emotion or "Focused"
-        self.current_emotion_confidence = float(confidence) if confidence is not None else 0.85
+        """Allows external services to update nominal HUD label if facial inference is inactive."""
+        with self._lock:
+            if not self.emotion_available or self.emotion_stale:
+                self.current_emotion_label = emotion or "Neutral"
+                self.current_emotion_confidence = float(confidence) if confidence is not None else 0.0
 
     def set_preview_requested(self, enabled: bool):
         with self._lock:
@@ -65,8 +139,6 @@ class CameraSensor:
             if enabled:
                 if not self.active or self.cap is None or not self.cap.isOpened():
                     self._open_hardware()
-            else:
-                pass
 
     def _open_hardware(self) -> bool:
         if cv2 is None:
@@ -84,25 +156,25 @@ class CameraSensor:
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 self.active = True
                 self.status_text = "CAMERA SENSING"
-                logger.info("Camera activated for sensing/preview.")
+                logger.info("Camera hardware opened successfully for sensing/preview.")
                 return True
             else:
                 self.active = False
                 self.status_text = "CAMERA UNAVAILABLE"
                 return False
         except Exception as e:
-            logger.warning(f"Failed to open camera: {e}")
+            logger.warning(f"Failed to open camera hardware: {e}")
             self.active = False
             self.status_text = "CAMERA ERROR"
             return False
 
     def open_camera(self) -> bool:
-        """Explicitly opens camera for the scheduled sensing window or preview."""
+        """Opens camera hardware during scheduled sensing window or preview."""
         with self._lock:
             return self._open_hardware()
 
     def close_camera(self, force: bool = False):
-        """Immediately closes and releases the camera hardware in a thread-safe manner."""
+        """Closes and releases camera hardware in a thread-safe manner."""
         with self._lock:
             if self.preview_requested and not force:
                 logger.info("Camera close requested, but preview is active. Keeping camera open for preview.")
@@ -112,6 +184,9 @@ class CameraSensor:
             self.eyes_detected = False
             self.smile_detected = False
             self.confidence = 0.0
+            self.face_confidence = 0.0
+            self.emotion_available = False
+            self.emotion_stale = True
             self.status_text = "CAMERA OFF"
             if self.cap is not None:
                 try:
@@ -119,7 +194,7 @@ class CameraSensor:
                 except Exception:
                     pass
                 self.cap = None
-            logger.info("Camera closed and released.")
+            logger.info("Camera hardware closed and released cleanly.")
 
     def close(self):
         self.close_camera(force=True)
@@ -128,18 +203,305 @@ class CameraSensor:
         with self._lock:
             return self.active and (self.cap is not None) and self.cap.isOpened()
 
+    def _select_primary_face(self, faces: List[Any], frame_shape: Tuple[int, ...]) -> Optional[Tuple[int, int, int, int]]:
+        """
+        EAOS is single-user. When multiple faces appear in the frame, select the primary user face:
+        Prioritizes largest face area with proximity to the center of the frame.
+        Prevents background people from corrupting user state.
+        """
+        if not faces or len(faces) == 0:
+            return None
+        h, w = frame_shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+
+        best_face = None
+        best_score = -1.0
+
+        for face in faces:
+            fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+            area = fw * fh
+            face_center_x = fx + (fw / 2.0)
+            face_center_y = fy + (fh / 2.0)
+            dist_to_center = math.hypot(face_center_x - cx, face_center_y - cy)
+            max_dist = math.hypot(cx, cy)
+            center_factor = max(0.2, 1.0 - (0.5 * (dist_to_center / max_dist)))
+            score = area * center_factor
+            if score > best_score:
+                best_score = score
+                best_face = (fx, fy, fw, fh)
+
+        return best_face
+
+    def _submit_frame_for_inference(self, frame: np.ndarray, primary_face: Optional[Tuple[int, int, int, int]]):
+        """
+        Submits a frame to the decoupled inference worker if interval has elapsed.
+        Keeps queue size bounded to 1 (drops stale frames to prevent memory leaks).
+        """
+        now = time.time()
+        if now - self._last_submitted_time < self.inference_interval:
+            return
+
+        self._last_submitted_time = now
+        try:
+            # Drop older frame if still in queue
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+            # Submit deep copy of the frame and primary face region
+            item = {
+                'frame': frame.copy(),
+                'primary_face': primary_face,
+                'timestamp': now
+            }
+            self._frame_queue.put_nowait(item)
+        except Exception as e:
+            logger.debug(f"Frame queue submission issue: {e}")
+
+    def _inference_worker_loop(self):
+        """
+        Dedicated background worker thread for DeepFace local inference.
+        Decoupled from camera capture/stream so live HUD preview NEVER freezes.
+        """
+        while self._worker_running:
+            try:
+                item = self._frame_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if not self._worker_running:
+                break
+
+            try:
+                self._run_emotion_inference(item['frame'], item['primary_face'], item['timestamp'])
+            except Exception as e:
+                logger.error(f"Unexpected error in DeepFace inference worker: {e}", exc_info=True)
+            finally:
+                del item
+
+    def _normalize_emotions(self, raw_scores: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Normalizes DeepFace emotion outputs to proper 0.0 - 1.0 probabilities that sum to exactly 1.0.
+        DeepFace returns scores as percentages (0 - 100); handles both percentage and float inputs.
+        """
+        floats: Dict[str, float] = {}
+        for k in FACIAL_EMOTIONS:
+            val = raw_scores.get(k, 0.0)
+            try:
+                floats[k] = max(0.0, float(val))
+            except Exception:
+                floats[k] = 0.0
+
+        total = sum(floats.values())
+        if total > 0.0:
+            norm = {k: round(v / total, 4) for k, v in floats.items()}
+        else:
+            norm = {k: round(1.0 / len(FACIAL_EMOTIONS), 4) for k in FACIAL_EMOTIONS}
+
+        # Ensure exact sum == 1.0
+        diff = round(1.0 - sum(norm.values()), 4)
+        norm['neutral'] = max(0.0, round(norm['neutral'] + diff, 4))
+        return norm
+
+    def _compute_consistency(self) -> float:
+        """
+        Calculates temporal consistency of facial emotion predictions over the rolling history.
+        Stable emotion over consecutive predictions gives high consistency (~0.8 - 1.0).
+        Rapid erratic oscillations reduce consistency (< 0.5) to dampen facial signal weight.
+        """
+        if len(self._emotion_history) < 2:
+            return 0.70
+
+        dominants = [p['dominant'] for p in self._emotion_history]
+        counts: Dict[str, int] = {}
+        for d in dominants:
+            counts[d] = counts.get(d, 0) + 1
+
+        mode_dominant = max(counts, key=counts.get)
+        mode_ratio = counts[mode_dominant] / float(len(dominants))
+
+        # Variance of the dominant emotion probability
+        dom_probs = [p['emotions'].get(mode_dominant, 0.0) for p in self._emotion_history]
+        mean_prob = sum(dom_probs) / float(len(dom_probs))
+        prob_var = sum((x - mean_prob) ** 2 for x in dom_probs) / float(len(dom_probs))
+
+        consistency = mode_ratio * (1.0 - min(0.5, 2.0 * math.sqrt(prob_var)))
+        return round(max(0.05, min(1.0, consistency)), 3)
+
+    def _run_emotion_inference(
+        self,
+        frame: np.ndarray,
+        primary_face: Optional[Tuple[int, int, int, int]],
+        capture_time: float
+    ):
+        """
+        Executes DeepFace pretrained emotion analysis on the selected face or full frame.
+        Runs entirely on-device without network calls or persistent disk writes.
+        """
+        t0 = time.time()
+        if DeepFace is None:
+            with self._lock:
+                self.emotion_available = False
+                self.emotion_stale = True
+                self.status_text = "DEEPFACE UNAVAILABLE"
+            return
+
+        h, w = frame.shape[:2]
+        crop_target = frame
+        use_backend = self.detector_backend
+
+        if primary_face is not None:
+            fx, fy, fw, fh = primary_face
+            # Add subtle padding around detected face bounding box
+            pad_x = int(fw * 0.15)
+            pad_y = int(fh * 0.15)
+            x1 = max(0, fx - pad_x)
+            y1 = max(0, fy - pad_y)
+            x2 = min(w, fx + fw + pad_x)
+            y2 = min(h, fy + fh + pad_y)
+
+            if (x2 - x1) >= 40 and (y2 - y1) >= 40:
+                crop_target = frame[y1:y2, x1:x2]
+                # If we already localized the primary face, skip secondary detection for speed
+                use_backend = "skip"
+
+        try:
+            analysis = DeepFace.analyze(
+                img_path=crop_target,
+                actions=['emotion'],
+                enforce_detection=False,
+                detector_backend=use_backend
+            )
+        except Exception as e:
+            logger.debug(f"DeepFace.analyze error: {e}")
+            with self._lock:
+                self.emotion_available = False
+                self.emotion_stale = True
+            return
+
+        duration_ms = round((time.time() - t0) * 1000, 1)
+
+        result = analysis[0] if isinstance(analysis, list) and len(analysis) > 0 else analysis
+        if not isinstance(result, dict) or 'emotion' not in result:
+            with self._lock:
+                self.emotion_available = False
+                self.emotion_stale = True
+            return
+
+        raw_scores = result.get('emotion', {})
+        norm_emotions = self._normalize_emotions(raw_scores)
+        dominant = max(norm_emotions, key=norm_emotions.get)
+        confidence = norm_emotions[dominant]
+
+        # Calculate face quality confidence
+        if primary_face is not None:
+            _, _, fw, fh = primary_face
+            size_ratio = min(1.0, max(0.1, (fw * fh) / (120.0 * 120.0)))
+            face_conf = round(min(0.98, 0.60 + 0.38 * size_ratio), 3)
+            face_found = True
+        else:
+            region = result.get('region', {})
+            fw = region.get('w', 0)
+            fh = region.get('h', 0)
+            if fw > 30 and fh > 30:
+                face_conf = 0.75
+                face_found = True
+            else:
+                face_conf = 0.30
+                face_found = False
+
+        # Apply Exponential Moving Average (EMA) smoothing
+        with self._lock:
+            self.total_inference_count += 1
+            self.raw_facial_emotions = norm_emotions
+
+            if len(self._emotion_history) == 0:
+                smoothed = dict(norm_emotions)
+            else:
+                smoothed = {}
+                for k in FACIAL_EMOTIONS:
+                    prev_val = self.smoothed_facial_emotions.get(k, norm_emotions[k])
+                    smoothed[k] = round(self.ema_alpha * norm_emotions[k] + (1.0 - self.ema_alpha) * prev_val, 4)
+
+            # Re-normalize smoothed distribution
+            tot_s = sum(smoothed.values())
+            if tot_s > 0.0:
+                smoothed = {k: round(v / tot_s, 4) for k, v in smoothed.items()}
+            self.smoothed_facial_emotions = smoothed
+
+            smoothed_dominant = max(smoothed, key=smoothed.get)
+            self.dominant_facial_emotion = smoothed_dominant
+            self.emotion_confidence = smoothed[smoothed_dominant]
+            self.face_confidence = face_conf
+            self.face_detected = face_found
+            self.emotion_available = face_found
+            self.emotion_stale = False
+            self.last_inference_time = capture_time
+            self.last_inference_duration_ms = duration_ms
+
+            # Append to rolling prediction history
+            self._emotion_history.append({
+                'timestamp': capture_time,
+                'dominant': dominant,
+                'confidence': confidence,
+                'emotions': norm_emotions
+            })
+
+            # Calculate emotion consistency
+            self.emotion_consistency = self._compute_consistency()
+
+            # Calculate transparent facial evidence signals
+            instability = max(0.0, 1.0 - self.emotion_consistency)
+            eye_vis_ratio = 1.0 if self.eyes_detected else 0.0
+
+            # Facial Frustration Evidence: 0.55 angry + 0.20 disgust + 0.10 surprise + 0.15 instability
+            self.facial_frustration = round(
+                0.55 * smoothed.get('angry', 0.0)
+                + 0.20 * smoothed.get('disgust', 0.0)
+                + 0.10 * smoothed.get('surprise', 0.0)
+                + 0.15 * instability,
+                3
+            )
+
+            # Facial Relaxation Evidence: 0.60 happy + 0.30 neutral + 0.10 stable_expression
+            self.facial_relaxation = round(
+                0.60 * smoothed.get('happy', 0.0)
+                + 0.30 * smoothed.get('neutral', 0.0)
+                + 0.10 * self.emotion_consistency,
+                3
+            )
+
+            # Facial Fatigue Proxy: 0.45 sad + 0.20 low_eye_vis + 0.20 neutral + 0.15 quality_penalty
+            quality_penalty = max(0.0, 1.0 - self.face_confidence)
+            self.facial_fatigue = round(
+                0.45 * smoothed.get('sad', 0.0)
+                + 0.20 * (1.0 - eye_vis_ratio)
+                + 0.20 * smoothed.get('neutral', 0.0)
+                + 0.15 * quality_penalty,
+                3
+            )
+
+            # Update HUD display attributes
+            self.current_emotion_label = smoothed_dominant.title()
+            self.current_emotion_confidence = self.emotion_confidence
+
+        logger.info(
+            f"DeepFace Emotion Inference: dominant={smoothed_dominant} ({int(self.emotion_confidence * 100)}%), "
+            f"face_detected={face_found}, conf={face_conf:.2f}, consistency={self.emotion_consistency:.2f}, "
+            f"duration={duration_ms}ms"
+        )
+
     def _create_standby_frame(self, message: str = "CAMERA IN STANDBY") -> bytes:
-        """Generates a high-tech HUD standby frame when hardware camera is off."""
+        """Generates a HUD standby frame when hardware camera is off."""
         w, h = 640, 360
-        img = np.full((h, w, 3), (15, 23, 42), dtype=np.uint8)  # #0f172a slate
-        # Subtle grid lines
+        img = np.full((h, w, 3), (15, 23, 42), dtype=np.uint8)
         for y in range(0, h, 30):
             cv2.line(img, (0, y), (w, y), (26, 38, 64), 1)
         for x in range(0, w, 30):
             cv2.line(img, (x, 0), (x, h), (26, 38, 64), 1)
-        # Inner cyber border
         cv2.rectangle(img, (20, 20), (w - 20, h - 20), (56, 189, 248), 1)
-        # Corner accents
+
         accent = (56, 189, 248)
         c_len = 16
         cv2.line(img, (20, 20), (20 + c_len, 20), accent, 3)
@@ -151,69 +513,71 @@ class CameraSensor:
         cv2.line(img, (w - 20, h - 20), (w - 20 - c_len, h - 20), accent, 3)
         cv2.line(img, (w - 20, h - 20), (w - 20, h - 20 - c_len), accent, 3)
 
-        # Center HUD Text
-        cv2.putText(img, "EAOS VISION & EMOTION SYSTEM", (w // 2 - 170, h // 2 - 35),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.65, (248, 189, 56), 1, cv2.LINE_AA)
+        cv2.putText(img, "EAOS VISION & DEEPFACE EMOTION SYSTEM", (w // 2 - 200, h // 2 - 35),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.60, (248, 189, 56), 1, cv2.LINE_AA)
         cv2.putText(img, f"[ {message} ]", (w // 2 - 130, h // 2 + 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.52, (148, 163, 184), 1, cv2.LINE_AA)
         cv2.putText(img, "Active during 1-min sensing window or click 'Live Preview'",
                     (w // 2 - 200, h // 2 + 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 116, 139), 1, cv2.LINE_AA)
-        cv2.putText(img, "ON-DEVICE PRIVACY · ZERO CLOUD UPLOAD", (w // 2 - 150, h - 35),
+        cv2.putText(img, "ON-DEVICE DEEPFACE INFERENCE · ZERO CLOUD UPLOAD", (w // 2 - 180, h - 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (52, 211, 153), 1, cv2.LINE_AA)
 
         ret, buf = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         return buf.tobytes() if ret else b''
 
-    def _annotate_frame(self, frame, faces, eyes_found, smiles_found) -> bytes:
-        """Draws HUD overlays: face bounding box with cyber corners, eye trackers, and live emotion badge."""
+    def _annotate_frame(
+        self,
+        frame: np.ndarray,
+        primary_face: Optional[Tuple[int, int, int, int]],
+        eyes_found: bool,
+        smiles_found: bool
+    ) -> bytes:
+        """
+        Draws live HUD overlays: face bounding box with cyber corners, eye trackers,
+        and real-time DeepFace emotion badge showing dominant facial emotion.
+        """
         h, w = frame.shape[:2]
 
         # Emotion colors mapping (BGR)
         palette = {
-            'Focused': (248, 189, 56),     # Electric Cyan
-            'Flow State': (247, 85, 168),  # Magenta/Purple
-            'Relaxed': (52, 211, 153),     # Emerald Green
-            'Fatigued': (36, 191, 251),    # Amber
-            'Frustrated': (113, 113, 248), # Coral Red
-            'Confused': (71, 224, 253),    # Yellow
+            'neutral': (248, 189, 56),    # Electric Cyan
+            'happy': (52, 211, 153),      # Emerald Green
+            'sad': (36, 191, 251),        # Amber
+            'angry': (113, 113, 248),     # Coral Red
+            'disgust': (180, 80, 240),    # Magenta
+            'fear': (71, 224, 253),       # Yellow
+            'surprise': (255, 140, 50),   # Light Blue
         }
-        color = palette.get(self.current_emotion_label, (248, 189, 56))
+        color = palette.get(self.dominant_facial_emotion.lower(), (248, 189, 56))
 
         # 1. Top HUD Bar
         cv2.rectangle(frame, (0, 0), (w, 36), (15, 23, 42), -1)
         cv2.line(frame, (0, 36), (w, 36), (56, 189, 248), 1)
-        cv2.circle(frame, (20, 18), 6, (52, 211, 153), -1)  # Live indicator green dot
+        cv2.circle(frame, (20, 18), 6, (52, 211, 153), -1)
         cv2.putText(frame, "EAOS VISION HUD", (34, 23),
                     cv2.FONT_HERSHEY_DUPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, "ON-DEVICE LOCAL INFERENCE", (w - 230, 23),
+        cv2.putText(frame, "ON-DEVICE DEEPFACE INFERENCE", (w - 250, 23),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (148, 163, 184), 1, cv2.LINE_AA)
 
         # 2. Draw Face Detection
-        if len(faces) > 0:
-            fx, fy, fw, fh = faces[0]
+        if primary_face is not None:
+            fx, fy, fw, fh = primary_face
             self.latest_face_box = (fx, fy, fw, fh)
 
-            # Sleek Cyber Corner Brackets around face
             c_len = max(14, int(fw * 0.18))
             thick = 2
-            # Top-left corner
             cv2.line(frame, (fx, fy), (fx + c_len, fy), color, thick)
             cv2.line(frame, (fx, fy), (fx, fy + c_len), color, thick)
-            # Top-right corner
             cv2.line(frame, (fx + fw, fy), (fx + fw - c_len, fy), color, thick)
             cv2.line(frame, (fx + fw, fy), (fx + fw, fy + c_len), color, thick)
-            # Bottom-left corner
             cv2.line(frame, (fx, fy + fh), (fx + c_len, fy + fh), color, thick)
             cv2.line(frame, (fx, fy + fh), (fx, fy + fh - c_len), color, thick)
-            # Bottom-right corner
             cv2.line(frame, (fx + fw, fy + fh), (fx + fw - c_len, fy + fh), color, thick)
             cv2.line(frame, (fx + fw, fy + fh), (fx + fw, fy + fh - c_len), color, thick)
 
-            # Subtle bounding box outline
-            cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), (color[0], color[1], color[2]), 1)
+            cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), (int(color[0]), int(color[1]), int(color[2])), 1)
 
-            # Eye tracking circles
             if eyes_found:
                 eye_y = fy + int(fh * 0.35)
                 eye_x1 = fx + int(fw * 0.32)
@@ -223,24 +587,26 @@ class CameraSensor:
                 cv2.circle(frame, (eye_x2, eye_y), 4, (255, 255, 255), -1)
                 cv2.circle(frame, (eye_x2, eye_y), 10, color, 1)
 
-            # 3. Dynamic Emotion Badge right above face
-            pct = int(self.current_emotion_confidence * 100)
-            tag_text = f"EMOTION: {self.current_emotion_label.upper()} ({pct}%)"
-            badge_y = fy - 12 if fy > 45 else fy + fh + 32
-            badge_w = max(210, fw)
+            # Real Dynamic DeepFace Emotion Badge right above face
+            if self.emotion_available and not self.emotion_stale:
+                pct = int(self.emotion_confidence * 100)
+                tag_text = f"FACIAL: {self.dominant_facial_emotion.upper()} ({pct}%)"
+            else:
+                tag_text = "FACE DETECTED"
 
-            # Badge background
+            badge_y = fy - 12 if fy > 45 else fy + fh + 32
+            badge_w = max(220, fw)
+
             cv2.rectangle(frame, (fx, badge_y - 24), (fx + badge_w, badge_y + 4), (15, 23, 42), -1)
             cv2.rectangle(frame, (fx, badge_y - 24), (fx + badge_w, badge_y + 4), color, 1)
             cv2.putText(frame, tag_text, (fx + 8, badge_y - 7),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_DUPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
 
             if smiles_found:
                 cv2.putText(frame, "SMILE DETECTED", (fx + 8, badge_y + 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.40, (52, 211, 153), 1, cv2.LINE_AA)
         else:
             self.latest_face_box = None
-            # Searching crosshair reticle in center
             cx, cy = w // 2, h // 2
             cv2.line(frame, (cx - 20, cy), (cx + 20, cy), (100, 116, 139), 1)
             cv2.line(frame, (cx, cy - 20), (cx, cy + 20), (100, 116, 139), 1)
@@ -249,9 +615,14 @@ class CameraSensor:
 
         # 4. Bottom Telemetry Bar
         cv2.rectangle(frame, (0, h - 28), (w, h), (15, 23, 42), -1)
-        status_line = f"FACE: {'LOCKED' if len(faces) > 0 else 'STANDBY'}   EYES: {'ENGAGED' if eyes_found else 'TRACKING'}   LIGHT: {self.lighting_condition} ({self.ambient_light})"
+        status_line = (
+            f"FACE: {'LOCKED' if primary_face else 'STANDBY'}   "
+            f"EYES: {'ENGAGED' if eyes_found else 'TRACKING'}   "
+            f"LIGHT: {self.lighting_condition} ({self.ambient_light})   "
+            f"CONSISTENCY: {int(self.emotion_consistency * 100)}%"
+        )
         cv2.putText(frame, status_line, (14, h - 9),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (148, 163, 184), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (148, 163, 184), 1, cv2.LINE_AA)
 
         ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         return buf.tobytes() if ret else b''
@@ -282,12 +653,13 @@ class CameraSensor:
                 if len(faces) == 0 and self._face_default and not self._face_default.empty():
                     faces = self._face_default.detectMultiScale(enhanced_gray, scaleFactor=1.15, minNeighbors=3, minSize=(45, 45))
 
-                self.face_detected = len(faces) > 0
+                primary_face = self._select_primary_face(faces, frame.shape)
+                self.face_detected = (primary_face is not None)
                 eyes_found = False
                 smiles_found = False
 
-                if self.face_detected:
-                    fx, fy, fw, fh = faces[0]
+                if primary_face is not None:
+                    fx, fy, fw, fh = primary_face
                     face_roi = enhanced_gray[fy:fy + fh, fx:fx + fw]
                     if self._eye_cascade and not self._eye_cascade.empty():
                         upper_face = face_roi[0:int(fh * 0.65), :]
@@ -298,16 +670,25 @@ class CameraSensor:
                         smiles = self._smile_cascade.detectMultiScale(lower_face, scaleFactor=1.2, minNeighbors=5, minSize=(20, 20))
                         smiles_found = len(smiles) > 0
 
-                jpeg_bytes = self._annotate_frame(frame, faces, eyes_found, smiles_found)
+                # Check stale emotion timeout
+                now_t = time.time()
+                if primary_face is None and (now_t - self.last_inference_time > self.stale_timeout_sec):
+                    self.emotion_available = False
+                    self.emotion_stale = True
+
+                # Submit frame to decoupled DeepFace worker
+                self._submit_frame_for_inference(frame, primary_face)
+
+                jpeg_bytes = self._annotate_frame(frame, primary_face, eyes_found, smiles_found)
                 self.latest_annotated_jpeg = jpeg_bytes
-                self.last_jpeg_time = time.time()
+                self.last_jpeg_time = now_t
                 return jpeg_bytes
             except Exception as e:
                 logger.warning(f"Error in get_stream_frame: {e}")
                 return self._create_standby_frame("ANALYSIS ERROR")
 
-    def snapshot(self):
-        """Processes current frame strictly in-memory and updates telemetry state."""
+    def snapshot(self) -> Dict[str, Any]:
+        """Processes current frame strictly in-memory and returns full telemetry state."""
         with self._lock:
             now_t = time.time()
             if not self.active or self.cap is None or not self.cap.isOpened():
@@ -316,12 +697,23 @@ class CameraSensor:
                     'active': False,
                     'status': self.status_text,
                     'face_detected': False,
+                    'face_confidence': 0.0,
                     'eyes_detected': False,
                     'smile_detected': False,
                     'confidence': 0.0,
                     'ambient_light': round(self.ambient_light, 3),
                     'lighting_condition': self.lighting_condition,
-                    'fatigue_score': round(self.fatigue_score, 2)
+                    'fatigue_score': round(self.fatigue_score, 2),
+                    'emotion_available': False,
+                    'emotion_stale': True,
+                    'dominant_facial_emotion': self.dominant_facial_emotion,
+                    'raw_facial_emotions': dict(self.raw_facial_emotions),
+                    'smoothed_facial_emotions': dict(self.smoothed_facial_emotions),
+                    'emotion_confidence': round(self.emotion_confidence, 3),
+                    'emotion_consistency': round(self.emotion_consistency, 3),
+                    'facial_frustration': round(self.facial_frustration, 3),
+                    'facial_fatigue': round(self.facial_fatigue, 3),
+                    'facial_relaxation': round(self.facial_relaxation, 3)
                 }
 
             try:
@@ -335,15 +727,30 @@ class CameraSensor:
                     'active': True,
                     'status': self.status_text,
                     'face_detected': False,
+                    'face_confidence': 0.0,
                     'eyes_detected': False,
                     'smile_detected': False,
                     'confidence': 0.0,
                     'ambient_light': round(self.ambient_light, 3),
                     'lighting_condition': self.lighting_condition,
-                    'fatigue_score': round(self.fatigue_score, 2)
+                    'fatigue_score': round(self.fatigue_score, 2),
+                    'emotion_available': False,
+                    'emotion_stale': True,
+                    'dominant_facial_emotion': self.dominant_facial_emotion,
+                    'raw_facial_emotions': dict(self.raw_facial_emotions),
+                    'smoothed_facial_emotions': dict(self.smoothed_facial_emotions),
+                    'emotion_confidence': round(self.emotion_confidence, 3),
+                    'emotion_consistency': round(self.emotion_consistency, 3),
+                    'facial_frustration': round(self.facial_frustration, 3),
+                    'facial_fatigue': round(self.facial_fatigue, 3),
+                    'facial_relaxation': round(self.facial_relaxation, 3)
                 }
 
             self.last_frame_time = now_t
+            primary_face = None
+            eyes_found = False
+            smiles_found = False
+
             try:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 raw_ambient = float(np.mean(gray) / 255.0)
@@ -366,12 +773,11 @@ class CameraSensor:
                 if len(faces) == 0 and self._profile_cascade and not self._profile_cascade.empty():
                     faces = self._profile_cascade.detectMultiScale(enhanced_gray, scaleFactor=1.15, minNeighbors=3, minSize=(45, 45))
 
-                self.face_detected = len(faces) > 0
-                eyes_found = False
-                smiles_found = False
+                primary_face = self._select_primary_face(faces, frame.shape)
+                self.face_detected = (primary_face is not None)
 
-                if self.face_detected:
-                    fx, fy, fw, fh = faces[0]
+                if primary_face is not None:
+                    fx, fy, fw, fh = primary_face
                     face_roi = enhanced_gray[fy:fy + fh, fx:fx + fw]
 
                     if self._eye_cascade and not self._eye_cascade.empty():
@@ -392,12 +798,23 @@ class CameraSensor:
                     else:
                         self.fatigue_score = max(0.0, self.fatigue_score - 0.10)
 
-                    self.confidence = min(0.98, 0.72 + 0.12 * (1 if eyes_found else 0) + 0.08 * min(2, len(faces)))
+                    size_ratio = min(1.0, max(0.1, (fw * fh) / (120.0 * 120.0)))
+                    self.confidence = min(0.98, 0.65 + 0.15 * (1 if eyes_found else 0) + 0.18 * size_ratio)
+                    self.face_confidence = round(self.confidence, 3)
                 else:
                     self.eyes_detected = False
                     self.smile_detected = False
                     self.confidence = 0.0
+                    self.face_confidence = 0.0
                     self.fatigue_score = max(0.0, self.fatigue_score - 0.05)
+
+                # Check stale emotion timeout
+                if primary_face is None and (now_t - self.last_inference_time > self.stale_timeout_sec):
+                    self.emotion_available = False
+                    self.emotion_stale = True
+
+                # Submit frame to decoupled DeepFace worker
+                self._submit_frame_for_inference(frame, primary_face)
 
                 self.frame_history.append({
                     'timestamp': now_t,
@@ -407,33 +824,52 @@ class CameraSensor:
                     'eyes_detected': self.eyes_detected,
                     'smile_detected': self.smile_detected,
                     'ambient_light': self.ambient_light,
-                    'confidence': self.confidence
+                    'confidence': self.confidence,
+                    'dominant_facial_emotion': self.dominant_facial_emotion,
+                    'smoothed_facial_emotions': dict(self.smoothed_facial_emotions),
+                    'emotion_confidence': self.emotion_confidence,
+                    'emotion_consistency': self.emotion_consistency,
+                    'emotion_available': self.emotion_available and not self.emotion_stale
                 })
 
-                # Store annotated frame for live feed caching
-                self.latest_annotated_jpeg = self._annotate_frame(frame, faces, eyes_found, smiles_found)
-                self.last_jpeg_time = time.time()
+                self.latest_annotated_jpeg = self._annotate_frame(frame, primary_face, eyes_found, smiles_found)
+                self.last_jpeg_time = now_t
 
             except Exception as e:
                 logger.warning(f"Error during facial frame analysis: {e}")
             finally:
                 del frame
 
+            inference_age = round(now_t - self.last_inference_time, 2) if self.last_inference_time > 0 else None
+
             return {
                 'active': True,
                 'status': self.status_text,
                 'face_detected': self.face_detected,
+                'face_confidence': round(self.face_confidence, 2),
                 'eyes_detected': self.eyes_detected,
                 'smile_detected': self.smile_detected,
                 'confidence': round(self.confidence, 2),
                 'ambient_light': round(self.ambient_light, 3),
                 'lighting_condition': self.lighting_condition,
-                'fatigue_score': round(self.fatigue_score, 2)
+                'fatigue_score': round(self.fatigue_score, 2),
+                'emotion_available': self.emotion_available and not self.emotion_stale,
+                'emotion_stale': self.emotion_stale or (not self.face_detected),
+                'emotion_inference_age': inference_age,
+                'dominant_facial_emotion': self.dominant_facial_emotion,
+                'raw_facial_emotions': dict(self.raw_facial_emotions),
+                'smoothed_facial_emotions': dict(self.smoothed_facial_emotions),
+                'emotion_confidence': round(self.emotion_confidence, 3),
+                'emotion_consistency': round(self.emotion_consistency, 3),
+                'facial_frustration': round(self.facial_frustration, 3),
+                'facial_fatigue': round(self.facial_fatigue, 3),
+                'facial_relaxation': round(self.facial_relaxation, 3)
             }
 
     def get_window_metrics(self, window_sec: float = 60.0) -> Dict[str, Any]:
         """
-        Calculates all Part 3 camera visual signals and conditions across the observation window.
+        Calculates authoritative camera visual signals, DeepFace facial distributions,
+        and temporal consistency across the 60-second observation window.
         """
         with self._lock:
             now = time.time()
@@ -454,6 +890,13 @@ class CameraSensor:
                     'face_detection_confidence': 0.0,
                     'fatigue_proxy': 0.0,
                     'camera_data_confidence': 0.0,
+                    'emotion_observation_count': 0,
+                    'emotion_consistency': 0.5,
+                    'facial_emotion_distribution': dict(self.smoothed_facial_emotions),
+                    'dominant_facial_emotion': self.dominant_facial_emotion,
+                    'facial_frustration': 0.0,
+                    'facial_fatigue': 0.0,
+                    'facial_relaxation': 0.0,
                     'conditions': {
                         'valid_camera_observation': False,
                         'face_present': False,
@@ -498,6 +941,48 @@ class CameraSensor:
 
             cam_conf = round(valid_frame_ratio * (0.3 + 0.7 * face_presence_ratio), 3) if valid_frame_ratio >= 0.5 else 0.0
 
+            # Aggregate DeepFace facial emotion probabilities across valid face frames
+            face_frames_with_emotions = [f for f in face_frames if f.get('smoothed_facial_emotions')]
+            emotion_obs_count = len(face_frames_with_emotions)
+
+            if emotion_obs_count > 0:
+                agg_emotions: Dict[str, float] = {}
+                for k in FACIAL_EMOTIONS:
+                    agg_emotions[k] = sum(f['smoothed_facial_emotions'].get(k, 0.0) for f in face_frames_with_emotions) / float(emotion_obs_count)
+                tot_e = sum(agg_emotions.values())
+                if tot_e > 0.0:
+                    agg_emotions = {k: round(v / tot_e, 4) for k, v in agg_emotions.items()}
+                window_dominant = max(agg_emotions, key=agg_emotions.get)
+            else:
+                agg_emotions = dict(self.smoothed_facial_emotions)
+                window_dominant = self.dominant_facial_emotion
+
+            window_consistency = self.emotion_consistency
+
+            # Window-level evidence signals
+            instability = max(0.0, 1.0 - window_consistency)
+            facial_frustration = round(
+                0.55 * agg_emotions.get('angry', 0.0)
+                + 0.20 * agg_emotions.get('disgust', 0.0)
+                + 0.10 * agg_emotions.get('surprise', 0.0)
+                + 0.15 * instability,
+                3
+            )
+            facial_relaxation = round(
+                0.60 * agg_emotions.get('happy', 0.0)
+                + 0.30 * agg_emotions.get('neutral', 0.0)
+                + 0.10 * window_consistency,
+                3
+            )
+            quality_penalty = max(0.0, 1.0 - face_conf)
+            facial_fatigue = round(
+                0.45 * agg_emotions.get('sad', 0.0)
+                + 0.20 * (1.0 - eye_visibility_ratio)
+                + 0.20 * agg_emotions.get('neutral', 0.0)
+                + 0.15 * quality_penalty,
+                3
+            )
+
             conditions = {
                 'valid_camera_observation': valid_frame_ratio >= 0.70,
                 'face_present': face_presence_ratio >= 0.60,
@@ -523,6 +1008,12 @@ class CameraSensor:
                 'face_detection_confidence': round(face_conf, 3),
                 'fatigue_proxy': fatigue_proxy,
                 'camera_data_confidence': cam_conf,
+                'emotion_observation_count': emotion_obs_count,
+                'emotion_consistency': window_consistency,
+                'facial_emotion_distribution': agg_emotions,
+                'dominant_facial_emotion': window_dominant,
+                'facial_frustration': facial_frustration,
+                'facial_fatigue': facial_fatigue,
+                'facial_relaxation': facial_relaxation,
                 'conditions': conditions
             }
-
