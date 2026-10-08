@@ -203,13 +203,13 @@ class CameraSensor:
         with self._lock:
             return self.active and (self.cap is not None) and self.cap.isOpened()
 
-    def _select_primary_face(self, faces: List[Any], frame_shape: Tuple[int, ...]) -> Optional[Tuple[int, int, int, int]]:
+    def _select_primary_face(self, faces: Any, frame_shape: Tuple[int, ...]) -> Optional[Tuple[int, int, int, int]]:
         """
         EAOS is single-user. When multiple faces appear in the frame, select the primary user face:
         Prioritizes largest face area with proximity to the center of the frame.
         Prevents background people from corrupting user state.
         """
-        if not faces or len(faces) == 0:
+        if faces is None or len(faces) == 0:
             return None
         h, w = frame_shape[:2]
         cx, cy = w / 2.0, h / 2.0
@@ -616,7 +616,7 @@ class CameraSensor:
         # 4. Bottom Telemetry Bar
         cv2.rectangle(frame, (0, h - 28), (w, h), (15, 23, 42), -1)
         status_line = (
-            f"FACE: {'LOCKED' if primary_face else 'STANDBY'}   "
+            f"FACE: {'LOCKED' if primary_face is not None else 'STANDBY'}   "
             f"EYES: {'ENGAGED' if eyes_found else 'TRACKING'}   "
             f"LIGHT: {self.lighting_condition} ({self.ambient_light})   "
             f"CONSISTENCY: {int(self.emotion_consistency * 100)}%"
@@ -647,10 +647,10 @@ class CameraSensor:
                 self.ambient_light = round(0.75 * self.ambient_light + 0.25 * raw_ambient, 3)
 
                 enhanced_gray = self._clahe.apply(gray) if self._clahe is not None else gray
-                faces = []
-                if self._face_alt2 and not self._face_alt2.empty():
+                faces = ()
+                if self._face_alt2 is not None and not self._face_alt2.empty():
                     faces = self._face_alt2.detectMultiScale(enhanced_gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
-                if len(faces) == 0 and self._face_default and not self._face_default.empty():
+                if (faces is None or len(faces) == 0) and self._face_default is not None and not self._face_default.empty():
                     faces = self._face_default.detectMultiScale(enhanced_gray, scaleFactor=1.15, minNeighbors=3, minSize=(45, 45))
 
                 primary_face = self._select_primary_face(faces, frame.shape)
@@ -661,14 +661,14 @@ class CameraSensor:
                 if primary_face is not None:
                     fx, fy, fw, fh = primary_face
                     face_roi = enhanced_gray[fy:fy + fh, fx:fx + fw]
-                    if self._eye_cascade and not self._eye_cascade.empty():
+                    if self._eye_cascade is not None and not self._eye_cascade.empty():
                         upper_face = face_roi[0:int(fh * 0.65), :]
                         eyes = self._eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15))
-                        eyes_found = len(eyes) > 0
-                    if self._smile_cascade and not self._smile_cascade.empty():
+                        eyes_found = (eyes is not None and len(eyes) > 0)
+                    if self._smile_cascade is not None and not self._smile_cascade.empty():
                         lower_face = face_roi[int(fh * 0.5):, :]
                         smiles = self._smile_cascade.detectMultiScale(lower_face, scaleFactor=1.2, minNeighbors=5, minSize=(20, 20))
-                        smiles_found = len(smiles) > 0
+                        smiles_found = (smiles is not None and len(smiles) > 0)
 
                 # Check stale emotion timeout
                 now_t = time.time()
@@ -765,12 +765,12 @@ class CameraSensor:
 
                 enhanced_gray = self._clahe.apply(gray) if self._clahe is not None else gray
 
-                faces = []
-                if self._face_alt2 and not self._face_alt2.empty():
+                faces = ()
+                if self._face_alt2 is not None and not self._face_alt2.empty():
                     faces = self._face_alt2.detectMultiScale(enhanced_gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
-                if len(faces) == 0 and self._face_default and not self._face_default.empty():
+                if (faces is None or len(faces) == 0) and self._face_default is not None and not self._face_default.empty():
                     faces = self._face_default.detectMultiScale(enhanced_gray, scaleFactor=1.15, minNeighbors=3, minSize=(45, 45))
-                if len(faces) == 0 and self._profile_cascade and not self._profile_cascade.empty():
+                if (faces is None or len(faces) == 0) and self._profile_cascade is not None and not self._profile_cascade.empty():
                     faces = self._profile_cascade.detectMultiScale(enhanced_gray, scaleFactor=1.15, minNeighbors=3, minSize=(45, 45))
 
                 primary_face = self._select_primary_face(faces, frame.shape)
@@ -780,15 +780,15 @@ class CameraSensor:
                     fx, fy, fw, fh = primary_face
                     face_roi = enhanced_gray[fy:fy + fh, fx:fx + fw]
 
-                    if self._eye_cascade and not self._eye_cascade.empty():
+                    if self._eye_cascade is not None and not self._eye_cascade.empty():
                         upper_face = face_roi[0:int(fh * 0.65), :]
                         eyes = self._eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15))
-                        eyes_found = len(eyes) > 0
+                        eyes_found = (eyes is not None and len(eyes) > 0)
 
-                    if self._smile_cascade and not self._smile_cascade.empty():
+                    if self._smile_cascade is not None and not self._smile_cascade.empty():
                         lower_face = face_roi[int(fh * 0.5):, :]
                         smiles = self._smile_cascade.detectMultiScale(lower_face, scaleFactor=1.2, minNeighbors=5, minSize=(20, 20))
-                        smiles_found = len(smiles) > 0
+                        smiles_found = (smiles is not None and len(smiles) > 0)
 
                     self.eyes_detected = eyes_found
                     self.smile_detected = smiles_found
