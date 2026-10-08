@@ -49,8 +49,10 @@ class NotificationService:
         **kwargs
     ) -> dict:
         now_ts = time.time()
-        now_iso = datetime.now(timezone.utc).isoformat()
-        action_clean = action.replace("_", " ").title()
+        if action == "MUTE_AUDIO":
+            action_clean = "System Volume Reduced To 30%"
+        else:
+            action_clean = action.replace("_", " ").title()
 
         # Duplicate Prevention: 10s window (or never when forced)
         is_duplicate = (not force and action == self.last_notified_action and (now_ts - self.last_notified_time < 10) and action != "NO_ACTION")
@@ -88,6 +90,16 @@ class NotificationService:
                 f"Adaptive Score: {adaptive_score:.2f} (Stable)\n"
                 f"Context: {context}\n"
                 f"Reason: {reason}\n"
+                f"Next assessment in {cycle_time_str}"
+            )
+        elif action == "MUTE_AUDIO":
+            title = "EAOS Adaptation"
+            subtitle = f"System volume reduced to 30% · AS: {adaptive_score:.2f}"
+            clean_reason = reason.replace("Audio muted", "System volume reduced to 30%").replace("audio muted", "system volume reduced to 30%")
+            message = (
+                f"Context: {context}\n"
+                f"Action: System volume reduced to 30%\n"
+                f"Reason: {clean_reason}\n"
                 f"Next assessment in {cycle_time_str}"
             )
         else:

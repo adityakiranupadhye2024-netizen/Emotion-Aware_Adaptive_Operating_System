@@ -354,7 +354,7 @@ class MacActuator:
             if verified:
                 record_os_state_event('AUDIO_MUTE', 'MUTED', source='EAOS', adaptive_score=as_score, reason=reason, cycle_id=cycle_id)
             return self._build_result(action, "Shortcut: Set Volume ('0')", state_before, state_after, verified, success,
-                                      f'System audio muted (original volume {self.eaos_original_volume}% preserved).', start_t, now_iso)
+                                      f'System volume reduced to 30% (original volume {self.eaos_original_volume}% preserved).', start_t, now_iso)
 
         # 7. UNMUTE_AUDIO (Part 9, Action 4 & Part 14)
         elif action == 'UNMUTE_AUDIO':
