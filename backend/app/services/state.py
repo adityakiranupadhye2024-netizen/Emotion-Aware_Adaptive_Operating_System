@@ -122,25 +122,34 @@ class StateBuilder:
             frustration_raw *= 0.20
 
         # Fatigue Score Fusion
+        # Typing error & correction factor: frequent backspacing directly reflects cognitive fatigue / accuracy slip
+        keyboard_fatigue_factor = min(1.0, backspace_rate / 0.12)
         low_typing_activity_score = max(0.0, 1.0 - min(1.0, typing_rate / 1.2))
         prolonged_idle_score = min(1.0, idle_seconds / 35.0)
         session_duration_score = min(1.0, session_minutes / 60.0)
 
         if has_valid_face:
             fatigue_raw = (
-                0.30 * facial_fatigue_signal
-                + 0.25 * low_typing_activity_score
-                + 0.20 * max(0.0, 1.0 - mouse_act)
-                + 0.15 * prolonged_idle_score
+                0.25 * facial_fatigue_signal
+                + 0.20 * low_typing_activity_score
+                + 0.15 * max(0.0, 1.0 - mouse_act)
+                + 0.10 * prolonged_idle_score
                 + 0.10 * session_duration_score
+                + 0.20 * keyboard_fatigue_factor
             )
         else:
             fatigue_raw = (
-                0.40 * low_typing_activity_score
-                + 0.25 * max(0.0, 1.0 - mouse_act)
-                + 0.20 * prolonged_idle_score
+                0.30 * low_typing_activity_score
+                + 0.20 * max(0.0, 1.0 - mouse_act)
+                + 0.15 * prolonged_idle_score
                 + 0.15 * session_duration_score
+                + 0.20 * keyboard_fatigue_factor
             )
+
+        # High backspace usage: repeated corrections and keystroke slips indicate cognitive fatigue
+        if backspace_rate >= 0.08 and not (has_valid_face and angry_disgust_evidence and mouse_agitation_score >= 0.35):
+            correction_fatigue_boost = min(0.60, (backspace_rate - 0.06) * 5.0)
+            fatigue_raw = max(fatigue_raw, 0.55 + correction_fatigue_boost)
 
         # Focus Score Fusion
         # Typing engagement: normalized up to 2.5 keys/sec
@@ -177,6 +186,10 @@ class StateBuilder:
                 + 0.30 * is_productive
                 + 0.25 * low_correction_score
             )
+
+        # Frequent backspacing indicates loss of focus / mental fatigue
+        if backspace_rate >= 0.08:
+            focus_raw *= max(0.20, 1.0 - min(0.75, (backspace_rate - 0.06) * 6.0))
 
         if is_idle or context in ['IDLE', 'GAMING']:
             focus_raw *= 0.25
