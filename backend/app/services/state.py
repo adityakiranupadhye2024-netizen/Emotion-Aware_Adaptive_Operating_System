@@ -143,44 +143,63 @@ class StateBuilder:
             )
 
         # Focus Score Fusion
-        typing_engagement = min(1.0, typing_rate / 3.0)
-        mouse_engagement = mouse_act
-        is_productive = 1.0 if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK'] else 0.2
-        low_correction_score = max(0.0, 1.0 - min(1.0, backspace_rate / 0.10))
+        # Typing engagement: normalized up to 2.5 keys/sec
+        typing_engagement = min(1.0, typing_rate / 2.5)
+        # When typing, interaction engagement is dominated by the keyboard
+        interaction_engagement = max(typing_engagement, mouse_act)
+
+        # Active typing in any application (browser, editor, terminal, notes) is productive engagement
+        if context in ['CODING', 'WRITING', 'STUDYING', 'GENERAL_WORK']:
+            is_productive = 1.0
+        elif typing_rate >= 1.2 or typing_act >= 0.25:
+            is_productive = 0.90
+        elif context == 'BROWSING':
+            is_productive = 0.65
+        else:
+            is_productive = 0.35
+
+        low_correction_score = max(0.0, 1.0 - min(1.0, backspace_rate / 0.12))
         stable_interaction_score = max(0.0, 1.0 - mouse_agitation_score)
 
-        # Facial focus support: consistent, calm/attentive facial expression (neutral/happy with high consistency)
+        # Facial focus support: consistent, calm/attentive facial expression
         if has_valid_face:
             calm_face = facial_dist.get('neutral', 0.0) * 0.6 + facial_dist.get('happy', 0.0) * 0.4
             facial_focus_support = min(1.0, calm_face * (0.5 + 0.5 * facial_consistency))
             focus_raw = (
-                0.30 * typing_engagement
-                + 0.20 * mouse_engagement
-                + 0.20 * is_productive
-                + 0.15 * low_correction_score
-                + 0.15 * facial_focus_support
+                0.35 * interaction_engagement
+                + 0.25 * is_productive
+                + 0.20 * low_correction_score
+                + 0.20 * facial_focus_support
             )
         else:
             focus_raw = (
-                0.35 * typing_engagement
-                + 0.25 * mouse_engagement
-                + 0.25 * is_productive
-                + 0.15 * low_correction_score
+                0.45 * interaction_engagement
+                + 0.30 * is_productive
+                + 0.25 * low_correction_score
             )
 
         if is_idle or context in ['IDLE', 'GAMING']:
             focus_raw *= 0.25
 
-        # Flow State Fusion: High sustained typing + productive context + minimal errors + low agitation + low frustration
-        if (
-            is_productive > 0.5
-            and typing_rate >= 2.0
-            and backspace_rate < 0.06
-            and mouse_agitation_score < 0.25
-            and frustration_raw < 0.25
-            and focus_raw >= 0.50
-        ):
-            flow_raw = 0.45 * typing_engagement + 0.35 * low_correction_score + 0.20 * stable_interaction_score
+        # Flow State Fusion: High sustained rhythm + low error rate + stable interaction
+        is_flow_candidate = (
+            typing_rate >= 1.5
+            and backspace_rate < 0.08
+            and mouse_agitation_score < 0.30
+            and frustration_raw < 0.30
+            and focus_raw >= 0.45
+        )
+        if is_flow_candidate:
+            flow_intensity = min(1.0, (typing_rate - 1.0) / 2.0)
+            flow_raw = (
+                0.40 * typing_engagement
+                + 0.30 * low_correction_score
+                + 0.20 * stable_interaction_score
+                + 0.10 * flow_intensity
+            )
+            # When typing fast (>= 2.2 keys/s) with clean rhythm (low backspaces), Flow State takes precedence!
+            if typing_rate >= 2.2 and backspace_rate < 0.05:
+                flow_raw = max(flow_raw, focus_raw + 0.06)
         else:
             flow_raw = 0.03
 
@@ -200,6 +219,11 @@ class StateBuilder:
                 + 0.25 * (1.0 if context in ['BROWSING', 'GENERAL_WORK', 'IDLE'] else 0.5)
                 + 0.15 * max(0.0, 1.0 - switching_score)
             )
+
+        # Active typing strongly suppresses relaxation (fast input is not passive relaxation)
+        if typing_rate >= 0.8:
+            typing_suppression = min(0.85, (typing_rate - 0.5) / 1.8)
+            relaxed_raw *= max(0.12, 1.0 - typing_suppression)
 
         # Confused Score Fusion: High app switching with erratic / unstable behavior
         confused_raw = (
