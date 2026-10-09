@@ -78,14 +78,11 @@ export default function App() {
 
 
   const isAutomationOn = state?.cycle?.automation_enabled ?? true;
-  const isDarkMode = state?.actual_os_state?.dark_mode;
   const isFocusOn = !!state?.actual_os_state?.focus_mode_active;
 
   React.useEffect(() => {
-    if (isDarkMode !== undefined) {
-      document.body.classList.toggle('light-theme', !isDarkMode);
-    }
-  }, [isDarkMode]);
+    document.body.classList.remove('light-theme');
+  }, []);
 
   return (
     <div className="app">
